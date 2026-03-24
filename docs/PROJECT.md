@@ -369,24 +369,170 @@ Phases are grouped into pod sessions. Each session is one pod spin-up → do all
 | Session 4 → 5 | Review benchmarks. Write `harness/fast_policy.py` and `harness/dual_mode.py`. Write DAgger loop script. |
 | Session 5 → 6 | Review DAgger results. Write `harness/pipeline.py` and `harness/benchmark.py`. Prepare demo recording script. |
 
-### RunPod Setup
+### RunPod Setup: Step-by-Step
 
-**GPU:** RTX 4090 (24GB) — best price-performance for this workload. The model is 15M params (~30MB FP16); you're paying for throughput on batched CEM rollouts, not VRAM.
+#### Step 1: Create a Network Volume
 
-**Template:** `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` (or latest PyTorch + CUDA 12.x). Needs `devel` variant for torch.compile/TensorRT support.
+This is done ONCE and persists across all pod sessions. It holds the 43GB dataset so you never re-download it.
 
-**Container Disk:** 20 GB — OS + Python packages + compiled engines. Keep it small; bulk data lives on the volume.
+1. Go to [runpod.io](https://runpod.io) → **Storage** → **Network Volumes** → **+ New Volume**
+2. Settings:
+   - **Name:** `lewm-data`
+   - **Region:** Pick the region with cheapest 4090 availability (check GPU Cloud page). **The volume and pod must be in the same region.**
+   - **Size:** `60 GB`
+   - **Volume Type:** Default (NVMe)
+3. Click **Create**
+4. Note the volume ID — you'll attach it when creating pods
 
-**Network Volume:** 60 GB — the PushT dataset is ~43GB uncompressed (.h5). Store datasets, checkpoints, and results here so they persist across pod stop/start cycles. This is what saves you from re-downloading 43GB every session.
+**Cost:** ~$4.20/month. Delete the volume when the project is done.
 
-**Volume cost:** ~$4.20/month (60GB x $0.07/GB/month). Keep it active for the duration of the project, then delete.
+#### Step 2: Create the GPU Pod
 
-**Total estimated project cost:**
+Do this at the start of each session. Stop (not delete) the pod when done — stopping is free, the volume keeps your data.
+
+1. Go to **GPU Cloud** → **Deploy**
+2. Settings:
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| **GPU Type** | RTX 4090 (24 GB) | Best $/FLOP for 15M param model. ~$0.40/hr community. |
+| **GPU Count** | 1 | Single GPU is sufficient |
+| **Template** | `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` | Needs `devel` for torch.compile + TensorRT. CUDA 12.4 matches latest PyTorch. |
+| **Container Disk** | `20 GB` | OS (~8GB) + Python packages (~5GB) + compiled engines (~2GB) + headroom. Bulk data on volume. |
+| **Volume Disk** | `0 GB` (use network volume instead) | Pod volume is ephemeral — don't use it. |
+| **Network Volume** | Attach `lewm-data` (60GB, created in Step 1) | Mounts at `/workspace/data`. Persists across stop/start. |
+| **Expose HTTP Ports** | Leave default (8888 for Jupyter) | Optional — SSH is the primary access method |
+| **Cloud Type** | Community Cloud | Cheapest. Use Secure Cloud only if you need guaranteed uptime. |
+
+3. Click **Deploy On-Demand** (or **Spot** for ~30% cheaper if you can tolerate interruptions — fine for Phases 0-2 which are stateless sweeps)
+
+#### Step 3: First-Time Setup (Session 1 Only)
+
+SSH into the pod and run:
+
+```bash
+# Save setup script to the network volume (runs once, reused every session)
+cat > /workspace/data/setup.sh << 'SETUP'
+#!/bin/bash
+set -e
+
+# System deps
+apt-get update && apt-get install -y -qq libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev ffmpeg zstd > /dev/null 2>&1
+
+# Clone/update repo
+cd /workspace
+if [ -d "le-wm" ]; then
+  cd le-wm && git pull
+else
+  git clone https://github.com/kingjulio8238/le-wm.git && cd le-wm
+fi
+
+# Python deps
+pip install -q "stable-worldmodel[train,env]" gdown
+
+# Set data path
+export STABLEWM_HOME=/workspace/data
+echo 'export STABLEWM_HOME=/workspace/data' >> ~/.bashrc
+mkdir -p $STABLEWM_HOME/pusht
+
+# Download dataset (43GB — skip if already on volume)
+if [ ! -f "$STABLEWM_HOME/pusht_expert_train.h5" ]; then
+  echo "Downloading PushT dataset (~13GB compressed → ~43GB)..."
+  gdown 1WrtW2jWfZ8W5CAIfTXIw-bbvu9NMK964 -O /tmp/pusht_expert_train.h5.zst
+  zstd -d /tmp/pusht_expert_train.h5.zst -o $STABLEWM_HOME/pusht_expert_train.h5
+  rm /tmp/pusht_expert_train.h5.zst
+else
+  echo "Dataset already on volume."
+fi
+
+# Download checkpoint (134MB — skip if already on volume)
+if [ ! -f "$STABLEWM_HOME/pusht/lejepa_object.ckpt" ]; then
+  echo "Downloading checkpoint..."
+  gdown 1CagjbwPOovHlmcvot07eWvq7fGswdYtI -O /tmp/lejepa.tar.zst
+  tar --zstd -xvf /tmp/lejepa.tar.zst -C $STABLEWM_HOME/pusht/
+  mv $STABLEWM_HOME/pusht/pusht/* $STABLEWM_HOME/pusht/ 2>/dev/null
+  rmdir $STABLEWM_HOME/pusht/pusht 2>/dev/null
+  rm /tmp/lejepa.tar.zst
+else
+  echo "Checkpoint already on volume."
+fi
+
+echo ""
+echo "=== Ready ==="
+echo "cd /workspace/le-wm"
+echo "python eval.py --config-name=pusht.yaml policy=pusht/lejepa"
+SETUP
+
+chmod +x /workspace/data/setup.sh
+
+# Run it
+bash /workspace/data/setup.sh
+```
+
+First run takes ~20 min (mostly downloading 43GB). Subsequent sessions: `bash /workspace/data/setup.sh` takes ~60 seconds.
+
+#### Step 4: Every Subsequent Session
+
+SSH into the pod and run:
+
+```bash
+bash /workspace/data/setup.sh
+cd /workspace/le-wm
+```
+
+That's it. Volume has your data, setup script installs deps and pulls latest code.
+
+#### Step 5: After Each Session
+
+1. **Save any results to the volume:** `cp -r results/ /workspace/data/results/`
+2. **Push code changes to git:** `git add -A && git commit -m "..." && git push`
+3. **Stop the pod** (RunPod dashboard → pod → Stop). This is free. The volume persists.
+4. Do NOT delete the pod unless you want to change GPU type or region.
+
+#### Volume Layout After Setup
+
+```
+/workspace/data/                          # Network volume (60GB, persistent)
+├── setup.sh                              # Reusable setup script
+├── pusht_expert_train.h5                 # PushT dataset (~43GB)
+├── pusht/
+│   ├── lejepa_object.ckpt               # Pretrained checkpoint
+│   └── lejepa_weights.ckpt
+├── results/                              # Saved across sessions
+│   ├── phase0_baseline.txt
+│   ├── phase1_fidelity.txt
+│   ├── phase2_sweeps.txt
+│   └── ...
+└── checkpoints/                          # Trained models (value fn, policy)
+    ├── value_ensemble.pt
+    └── fast_policy.pt
+
+/workspace/le-wm/                         # Git repo (on container disk, re-cloned each session)
+├── jepa.py
+├── eval.py
+├── harness/                              # Your harness code
+└── ...
+```
+
+#### Cost Summary
 
 | Item | Cost |
 |------|------|
-| RunPod GPU time (~24-45 hrs @ $0.40/hr) | ~$10-18 |
-| Network volume (~1-2 months @ $4.20/mo) | ~$4-8 |
+| Network volume (60GB, ~1-2 months) | ~$4-8 |
+| Session 1: Setup + Phase 0 + 1 (2-3 hrs) | ~$1 |
+| Session 2: Phase 2 sweeps (8-15 hrs) | ~$3-6 |
+| Session 3: Phase 3 + 4 (3-5 hrs) | ~$1-2 |
+| Session 4: Phase 5 compilation (3-6 hrs) | ~$1-2 |
+| Session 5: Phase 6 DAgger (6-12 hrs) | ~$2-5 |
+| Session 6: Phase 7 integration (2-4 hrs) | ~$1-2 |
+| **Total** | **~$13-25** |
+
+#### Tips
+
+- **Use `tmux` or `nohup`** for long-running sweeps so you can disconnect from SSH without killing the job. Example: `tmux new -s sweep` → run script → `Ctrl+B, D` to detach → reconnect later with `tmux attach -t sweep`.
+- **Use Spot instances** for Phases 0-2 (stateless sweeps). If interrupted, just re-run — no state is lost. Save ~30% on GPU cost.
+- **Stop, don't delete** the pod between sessions within the same day. Stopping is instant and free. Starting is faster than creating a new pod.
+- **Delete the volume** when the project is done. It costs $4.20/month even when no pod is running.
 | **Total** | **~$14-26** |
 
 ### RunPod Pod Startup Script
