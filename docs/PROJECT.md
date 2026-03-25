@@ -145,23 +145,50 @@ Linear probing: positions R²=0.93-0.98, block angle R²=0.79, velocities ~0.
 
 ---
 
-### Phase 2: Planning Budget Reduction
+### Phase 2: Planning Budget Reduction ⬜ NEXT
 
-Determine how much planning compute can be cut without losing performance. This is pure configuration sweeps — no new code beyond a sweep script and logging.
+Determine how much planning compute can be cut without losing performance.
 
-**Steps:**
-1. Sweep sample count: run eval at `solver.num_samples=` {300, 128, 64, 32, 16} with 30 iterations each. Record success rate and planning time for each.
-2. Sweep iteration count: run eval at `solver.n_steps=` {30, 15, 10, 5, 3} with 300 samples each. Record success rate and planning time for each.
-3. Sweep both jointly at the promising intersection points from steps 1-2.
-4. Swap CEM for iCEM: run eval with `ICEMSolver` at the same sample/iteration grid. Compare against CEM at equal budgets.
-5. Log CEM cost at each iteration to identify convergence behavior — this informs whether adaptive early stopping is viable.
+**Implementation:** `scripts/sweep_budget.py` (42 configs: 21 CEM + 21 iCEM across samples {16-300} x iterations {3-30}), `scripts/log_convergence.py` (per-iteration cost logging for convergence analysis), `config/eval/solver/icem.yaml`.
+
+**On-Pod (Session 2):**
+
+```bash
+# Setup (~60s if volume has data from Session 1)
+bash /workspace/data/setup.sh
+cd /workspace/le-harness
+
+# Start in tmux (so you can disconnect)
+tmux new -s sweep
+
+# Step 1-4: Run the full budget sweep (~8-15 hours, 42 configs)
+python scripts/sweep_budget.py --policy pusht/lejepa
+
+# If pod gets interrupted, resume:
+# python scripts/sweep_budget.py --policy pusht/lejepa --resume
+
+# Step 5: After sweep completes, log convergence on the top 2-3 configs.
+# Pick the best configs from the sweep CSV, e.g.:
+python scripts/log_convergence.py --solver icem --num-samples 64 --n-steps 10 --policy pusht/lejepa
+python scripts/log_convergence.py --solver icem --num-samples 64 --n-steps 5 --policy pusht/lejepa
+python scripts/log_convergence.py --solver cem --num-samples 64 --n-steps 10 --policy pusht/lejepa
+
+# Save results and stop pod
+cp -r results/ /workspace/data/results/ 2>/dev/null
+git add -A && git commit -m "Phase 2: sweep results" && git push
+# Stop pod from dashboard
+```
+
+**Detach from tmux:** `Ctrl+B, D`. Reconnect later: `tmux attach -t sweep`.
 
 **Artifacts:**
-- Planning efficiency table: success rate vs. (samples, iterations, solver)
-- Cost convergence curves per task
+- `/workspace/data/results/phase2_sweep.csv` — Success rate and timing for all 42 configs
+- `/workspace/data/results/phase2_convergence_*.json` — Per-iteration cost curves for top configs
 - Identified minimum viable planning budget (samples x iterations) for iCEM
 
-**Gate:** There exists a configuration where success rate is within 5% of baseline AND total predictor forward passes are reduced by at least 5x. The baseline is 45,000 forward passes (300 samples x 30 iterations x 5 predictor steps per rollout). The target is ~9,000 or fewer (e.g., 64 samples x 5 iterations x 5 steps = 1,600). If no such configuration exists, the world model's predictions are too noisy for efficient planning — return to Phase 1 findings and consider fine-tuning the predictor before proceeding.
+**Gate:** There exists a configuration where success rate is ≥93% (within 5 percentage points of baseline 98%) AND total predictor forward passes are ≤9,000 (5x reduction from baseline 45,000). The sweep script auto-checks this. If no config passes, the world model's predictions are too noisy for efficient planning — return to Phase 1 findings and consider fine-tuning the predictor before proceeding.
+
+**After gate passes:** Review the convergence JSON files. Identify at which CEM iteration the cost plateaus (<1% improvement). This plateau iteration becomes the starting point for Phase 3's adaptive stopping threshold.
 
 ---
 

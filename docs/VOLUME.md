@@ -18,5 +18,7 @@ Everything is on the network volume (`/workspace/data/`). Here's what persists a
     ├── phase0_timing.log                    # Timing data
     ├── phase1_fidelity.json                 # Fidelity audit results (JSON)
     ├── phase1_fidelity.log                  # Fidelity audit log
-    └── random_videos/                       # 50 random rollout videos
+    ├── random_videos/                       # 50 random rollout videos
+    ├── phase2_sweep.csv                     # (after Session 2) Budget sweep results
+    └── phase2_convergence_*.json            # (after Session 2) Per-iteration cost curves
 ```
