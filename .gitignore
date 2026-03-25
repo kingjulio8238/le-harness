@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+outputs/
+*.mp4
+*.h5
+*.ckpt
+*.pt
+*.log
+pusht_results.txt
