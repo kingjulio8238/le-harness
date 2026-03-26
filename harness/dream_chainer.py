@@ -55,18 +55,20 @@ class DreamChainer:
 
     def plan(self, obs_image_np: np.ndarray, goal_image_np: np.ndarray,
              return_all_actions: bool = False,
-             measure_drift: bool = False) -> np.ndarray:
+             measure_drift: bool = False):
         """Plan via chained dreams.
 
         Args:
             obs_image_np: (H, W, 3) uint8 current observation
             goal_image_np: (H, W, 3) uint8 goal image
             return_all_actions: if True, return actions from all chains (for analysis)
-            measure_drift: if True, track predicted vs actual embedding drift
+            measure_drift: if True, also return predicted terminal embedding
+                from chain 1 for drift comparison
 
         Returns:
             action from the first chain (receding horizon), or list of all
-            chain actions if return_all_actions=True
+            chain actions if return_all_actions=True.
+            If measure_drift=True, returns (action, predicted_terminal_emb).
         """
         t_start = time.perf_counter()
 
@@ -85,6 +87,7 @@ class DreamChainer:
             current_emb = obs_emb
             chain_actions = []
             chain_times = []
+            chain_terminal_embs = []
 
             for i in range(self.num_chains):
                 t_chain = time.perf_counter()
@@ -96,6 +99,7 @@ class DreamChainer:
 
                 chain_actions.append(action)
                 chain_times.append((time.perf_counter() - t_chain) * 1000)
+                chain_terminal_embs.append(terminal_emb)
 
                 # The next chain starts from where this dream ended
                 current_emb = terminal_emb
@@ -110,8 +114,12 @@ class DreamChainer:
         if return_all_actions:
             return chain_actions
 
+        first_action = chain_actions[0]
+        if measure_drift:
+            return first_action, chain_terminal_embs[0]
+
         # Receding horizon: execute only the first chain's action
-        return chain_actions[0]
+        return first_action
 
     @torch.inference_mode()
     def plan_from_embeddings(self, obs_emb: torch.Tensor, goal_emb: torch.Tensor,
@@ -161,12 +169,9 @@ class DreamChainer:
         Returns:
             List of K tensors, each (1, 1, D)
         """
-        subgoals = []
-        for i in range(1, num_chains + 1):
-            alpha = i / num_chains
-            subgoal = (1 - alpha) * obs_emb + alpha * goal_emb
-            subgoals.append(subgoal)
-        return subgoals
+        # All chains target the final goal directly — no interpolated subgoals.
+        # Interpolation produced semantically invalid waypoints that degraded planning.
+        return [goal_emb] * num_chains
 
     def get_timing_summary(self) -> dict:
         """Return timing statistics."""

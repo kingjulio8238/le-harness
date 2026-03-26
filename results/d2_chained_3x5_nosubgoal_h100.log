@@ -1,0 +1,176 @@
+
+============================================================
+D2: Dream Chaining Evaluation
+============================================================
+Mode: chained
+Num chains: 3
+Eval budget: 100 steps
+Num eval: 50 episodes
+Measure drift: False
+Policy: pusht/lejepa
+
+Loading and compiling model...
+Compiling predictor with backend='inductor', mode='reduce-overhead'...
+Compiling encoder with backend='inductor', mode='reduce-overhead'...
+Patched rollout with pre-allocated buffers.
+Warming up compiled pipeline...
+  warmup 1/3
+  warmup 2/3
+  warmup 3/3
+Pipeline ready.
+DreamChainer initialized: 3 chains × horizon 5
+08:49:29.972 | INFO    (15570, stable_pretraining) | Cached 'action' from '/workspace/data/pusht_expert_train.h5'
+08:49:31.935 | INFO    (15570, stable_pretraining) | Cached 'proprio' from '/workspace/data/pusht_expert_train.h5'
+08:49:33.910 | INFO    (15570, stable_pretraining) | Cached 'state' from '/workspace/data/pusht_expert_train.h5'
+08:49:35.777 | INFO    (15570, stable_worldmodel.world) | 🌍🌍🌍 World swm/PushT-v1 initialized 🌍🌍🌍
+08:49:35.777 | INFO    (15570, stable_worldmodel.world) | 🕹️ 🕹️ 🕹️ Action space 🕹️ 🕹️ 🕹️
+08:49:35.777 | INFO    (15570, stable_worldmodel.world) | Box(-1.0, 1.0, (1, 2), float32)
+08:49:35.777 | INFO    (15570, stable_worldmodel.world) | 👁️ 👁️ 👁️ Observation space 👁️ 👁️ 👁️
+08:49:35.777 | INFO    (15570, stable_worldmodel.world) | Dict('proprio': Box(0.0, 512.0, (1, 4), float64), 'state': Box(0.0, [[512.         512.         512.         512.           6.28318531
+  512.         512.        ]], (1, 7), float64))
+08:49:35.777 | INFO    (15570, stable_worldmodel.world) | ⚗️ ⚗️ ⚗️ Variation space ⚗️ ⚗️ ⚗️
+agent:
+    angle: Box(-6.283185307179586, 6.283185307179586, (), float64)
+    color: Box(0, 255, (3,), uint8)
+    scale: Box(20.0, 60.0, (), float32)
+    shape: Discrete(8)
+    start_position: Box(50.0, 450.0, (2,), float64)
+    velocity: Box(0.0, 512.0, (2,), float64)
+background:
+    color: Box(0, 255, (3,), uint8)
+block:
+    angle: Box(-6.283185307179586, 6.283185307179586, (), float64)
+    color: Box(0, 255, (3,), uint8)
+    scale: Box(20.0, 60.0, (), float32)
+    shape: Discrete(7, start=1)
+    start_position: Box(100.0, 400.0, (2,), float64)
+goal:
+    angle: Box(-6.283185307179586, 6.283185307179586, (), float64)
+    color: Box(0, 255, (3,), uint8)
+    position: Box(50.0, 450.0, (2,), float64)
+    scale: Box(20.0, 60.0, (), float32)
+rendering:
+    render_goal: Discrete(2)
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/utils/passive_env_checker.py:158: UserWarning: [33mWARN: The obs returned by the `step()` method is not within the observation space.[0m
+  logger.warn(f"{pre} is not within the observation space.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+/usr/local/lib/python3.11/dist-packages/gymnasium/spaces/box.py:424: UserWarning: [33mWARN: Casting input x to numpy array.[0m
+  gym.logger.warn("Casting input x to numpy array.")
+
+Running 50 episodes...
+  Episode 1/50: success_rate=100.0%, mean_planning=6012ms
+  Episode 10/50: success_rate=20.0%, mean_planning=266ms
+  Episode 20/50: success_rate=25.0%, mean_planning=266ms
+  Episode 30/50: success_rate=23.3%, mean_planning=266ms
+  Episode 40/50: success_rate=22.5%, mean_planning=266ms
+  Episode 50/50: success_rate=22.0%, mean_planning=267ms
+
+============================================================
+D2 Results: chained (3 chains)
+============================================================
+Success rate: 22.0% (11/50)
+Planning latency: 300 ms/step (3.3 Hz)
+Eval budget: 100 steps/episode
+Chain timing: 287 ms total (3 chains)
+  Chain 1: 114 ms
+  Chain 2: 88 ms
+  Chain 3: 85 ms
+
+Results saved to /workspace/data/results/d2_chained_3x5_h100.json

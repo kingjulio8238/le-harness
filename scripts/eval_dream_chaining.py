@@ -189,12 +189,18 @@ def run_eval(args):
         while env_step < args.eval_budget:
             t0 = time.perf_counter()
 
+            predicted_terminal_emb = None
             if args.mode == "single":
                 # Standard receding-horizon CEM
                 raw_action = pipeline.plan(obs_image, goal_pixels)
             else:
                 # Dream chaining
-                raw_action = chainer.plan(obs_image, goal_pixels)
+                if args.measure_drift:
+                    raw_action, predicted_terminal_emb = chainer.plan(
+                        obs_image, goal_pixels, measure_drift=True
+                    )
+                else:
+                    raw_action = chainer.plan(obs_image, goal_pixels)
 
             planning_times.append((time.perf_counter() - t0) * 1000)
 
@@ -239,6 +245,23 @@ def run_eval(args):
                     print(f"  Episode {ep_i} step {env_step}: env error: {e}")
                     break
 
+            # Measure drift: compare predicted terminal embedding to actual
+            if args.measure_drift and predicted_terminal_emb is not None and not episode_success:
+                with torch.inference_mode():
+                    actual_tensor = pipeline.preprocess(obs_image)
+                    actual_emb = pipeline.encode(actual_tensor)  # (1, 1, D)
+                    mse = torch.nn.functional.mse_loss(
+                        predicted_terminal_emb, actual_emb
+                    ).item()
+                    cos_sim = torch.nn.functional.cosine_similarity(
+                        predicted_terminal_emb.flatten(),
+                        actual_emb.flatten(), dim=0
+                    ).item()
+                    drift_records.append({
+                        "episode": ep_i, "env_step": env_step,
+                        "mse": mse, "cosine_sim": cos_sim,
+                    })
+
             if episode_success:
                 break
 
@@ -272,6 +295,21 @@ def run_eval(args):
     if chainer is not None:
         results["chainer_timing"] = chainer.get_timing_summary()
 
+    # Add drift metrics
+    if drift_records:
+        mses = [d["mse"] for d in drift_records]
+        cosines = [d["cosine_sim"] for d in drift_records]
+        results["drift"] = {
+            "num_samples": len(drift_records),
+            "mse_mean": float(np.mean(mses)),
+            "mse_std": float(np.std(mses)),
+            "mse_median": float(np.median(mses)),
+            "mse_max": float(np.max(mses)),
+            "cosine_sim_mean": float(np.mean(cosines)),
+            "cosine_sim_std": float(np.std(cosines)),
+            "cosine_sim_min": float(np.min(cosines)),
+        }
+
     # Print summary
     print(f"\n{'='*60}")
     print(f"D2 Results: {args.mode}" + (f" ({args.num_chains} chains)" if args.mode == "chained" else ""))
@@ -289,6 +327,16 @@ def run_eval(args):
                 for i, ms in enumerate(ts["per_chain_mean_ms"]):
                     print(f"  Chain {i+1}: {ms:.0f} ms")
 
+    # Print drift metrics
+    if drift_records:
+        d = results["drift"]
+        print(f"\nDrift (predicted vs actual embedding after chain 1):")
+        print(f"  MSE:        {d['mse_mean']:.6f} +/- {d['mse_std']:.6f} "
+              f"(median: {d['mse_median']:.6f}, max: {d['mse_max']:.6f})")
+        print(f"  Cosine sim: {d['cosine_sim_mean']:.4f} +/- {d['cosine_sim_std']:.4f} "
+              f"(min: {d['cosine_sim_min']:.4f})")
+        print(f"  Samples:    {d['num_samples']}")
+
     # Save results
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -297,6 +345,8 @@ def run_eval(args):
     if args.mode == "chained":
         suffix += f"_{args.num_chains}x5"
     suffix += f"_h{args.eval_budget}"
+    if args.measure_drift:
+        suffix += "_drift"
 
     out_path = out_dir / f"d2_{suffix}.json"
     with open(out_path, "w") as f:

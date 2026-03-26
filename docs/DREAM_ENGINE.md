@@ -56,11 +56,11 @@ This budget enables tree search that large models cannot do. The small model's s
 
 ---
 
-## Phase D2: Dream Chaining
+## Phase D2: Dream Chaining — COMPLETE
 
 **Goal:** Enable long-horizon planning (horizon 20-50+) by chaining short, reliable dreams.
 
-**Why this matters:** Phase 1 showed prediction error at depth 5 is only 0.139 of inter-state distance — very reliable. But at depth 10+, error compounds. Dream chaining solves this: plan in chunks of 5-10 steps, re-anchor to reality (or to a subgoal) between chunks, and chain the chunks together.
+**Status:** Complete. Gate not passed — chaining does not outperform single-horizon on PushT. Root cause identified and partially mitigated.
 
 **Architecture:**
 
@@ -74,25 +74,45 @@ Dream Chain for a long-horizon task:
                                                      re-encode → [Dream 3: steps 11-15] → goal
 ```
 
-Each dream is a standard CEM solve over horizon 5. Between dreams, the system either:
-- **Re-encodes** the actual observation (if executing in the environment — MPC-style)
-- **Uses the predicted endpoint** as the next dream's starting state (if planning ahead without execution)
+Each dream is a standard CEM solve over horizon 5. Between dreams, the predicted endpoint is used as the next dream's starting state.
 
-**Steps:**
-1. **Implement `DreamChainer`**: A wrapper that runs CEM K times sequentially, where each CEM solve starts from the predicted endpoint of the previous one. Total horizon = K × per-dream horizon.
-2. **Subgoal generation**: For a given (start, goal) pair, linearly interpolate in latent space to generate K-1 intermediate subgoals. Each dream targets the next subgoal, not the final goal. This gives CEM a closer target and prevents it from getting stuck on distant goals.
-3. **Re-anchoring**: After executing each dream's action chunk in the environment, re-encode the actual observation to correct latent drift. This is standard MPC receding horizon — but now explicitly framed as "start a new dream from reality."
-4. **Evaluate on long-horizon tasks**: Modify PushT eval to use longer `eval_budget` (100-200 steps). Compare: single dream (horizon 5, receding) vs. chained dreams (3-5 chains of horizon 5 with subgoal interpolation).
-5. **Measure drift**: Track the MSE between predicted chain endpoints and actual re-encoded observations. This quantifies how much error accumulates across chains.
+### D2 Results
 
-**Key design decisions:**
-- **Subgoal interpolation vs. learned subgoals**: Start with linear interpolation in latent space (free, no training). If this fails (latent space isn't convex for the task), move to learned subgoal proposal (see Phase D3).
-- **Chain length**: Start with 3-5 chains (horizon 15-25). Phase 1 data suggests the model is reliable enough for this.
-- **Re-anchor frequency**: Re-encode every chain (every 5 steps). Don't try to predict 20 steps without re-anchoring.
+| Config | Success Rate | Latency | Hz |
+|--------|-------------|---------|-----|
+| Single horizon (baseline) | **28%** (14/50) | 93ms | 10.7 |
+| Chained 3×5 (interpolated subgoals) | **4%** (2/50) | 267ms | 3.7 |
+| Chained 5×5 (interpolated subgoals) | **2%** (1/50) | 436ms | 2.2 |
+| Chained 3×5 (no subgoals — all chains target goal) | **22%** (11/50) | 267ms | 3.3 |
 
-**Gate:** Dream chaining achieves higher success rate than single-horizon planning on tasks requiring >10 steps to complete. If chaining with linear subgoal interpolation fails, the latent space geometry is the bottleneck — move to learned subgoals.
+### Drift Measurement (5 chains, 20 episodes)
 
-**Estimated cost:** ~$3-6 (one pod session, code + eval).
+| Metric | Value |
+|--------|-------|
+| MSE (predicted vs actual embedding) | 0.053 +/- 0.037 |
+| MSE max | 0.443 |
+| Cosine similarity | 0.976 +/- 0.018 |
+| Cosine similarity min | 0.803 |
+
+Drift is moderate — the model predicts direction well (cosine ~0.98) but magnitude drifts, compounding across chains.
+
+### Key Findings
+
+1. **Linear interpolation in latent space is geometrically valid but semantically useless.** The 192-dim embeddings are unnormalized (no L2 constraint) and SIGReg pushes them toward isotropic Gaussian. Convex combinations stay in-distribution mathematically. But interpolated midpoints don't correspond to reachable physical states — a point halfway between "T at position A" and "T at position B" is a blurred average, not a useful waypoint.
+
+2. **Removing interpolated subgoals recovered most performance (4% → 22%).** When all chains target the final goal directly, chaining no longer actively hurts. But it still doesn't help — 22% vs 28% single-horizon, at 3x the latency.
+
+3. **PushT is too short-horizon for chaining to matter.** The task is typically solved in <10 steps. Looking 15-25 steps ahead via chaining provides no benefit when the planning horizon (5 steps) already reaches the goal.
+
+4. **Chaining's value requires a harder task.** On tasks requiring 20+ steps with obstacles or sequenced contacts, the multi-step lookahead from chaining could provide signal that flat CEM misses. PushT doesn't test this.
+
+### Implications for D3
+
+- D3 (Dream Trees) does NOT automatically avoid the interpolation problem — tree nodes still optimize MSE-to-goal through the same latent space.
+- However, D3's tree structure provides value through **structured exploration** (branching, pruning), not through longer horizons. This is a different mechanism than chaining.
+- D3 should be evaluated on PushT first (to compare against flat CEM at matched compute), then on harder tasks if PushT is too simple.
+
+**Actual cost:** ~$2 (one pod session).
 
 ---
 
@@ -424,8 +444,8 @@ git add -A && git commit -m "D2: dream chaining results" && git push
 ## Summary: Dream Engine Phases
 
 ```
-D2: Dream Chaining           ← NEXT — long-horizon via chained short dreams
-D3: Dream Trees              ← structured search, core differentiator
+D2: Dream Chaining           ← COMPLETE — gate not passed on PushT, subgoal interpolation diagnosed
+D3: Dream Trees              ← NEXT — structured search, core differentiator
 D4: Dream Scoring v2         ← robust multi-signal scoring, fix reward hacking
 D5: Language Conditioning     ← independent, text goals for adoption
 D1: Multi-Task Validation    ← non-blocking, do when Drive access works
