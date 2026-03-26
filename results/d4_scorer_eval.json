@@ -1,0 +1,87 @@
+{
+  "flat_mse": {
+    "success_rate": 18.0,
+    "num_successes": 9,
+    "mean_planning_ms": 92.16640718536536
+  },
+  "tree_mse": {
+    "success_rate": 22.0,
+    "num_successes": 11,
+    "mean_planning_ms": 690.0247732999843,
+    "tree_timing": {
+      "total_ms": {
+        "mean": 689.9833765477587,
+        "std": 6.636345828820785,
+        "p50": 689.0150224789977
+      },
+      "root_ms": {
+        "mean": 338.90850328360546,
+        "std": 1.4619031065602655,
+        "p50": 338.63998390734196
+      },
+      "expansion_ms": {
+        "mean": 338.42670280099304,
+        "std": 1.4579670412107337,
+        "p50": 338.11153564602137
+      },
+      "effective_hz": 1.4493102790437775,
+      "total_cem_calls": 8.0,
+      "total_nodes": 9.0
+    }
+  },
+  "flat_scorer": {
+    "success_rate": 20.0,
+    "num_successes": 10,
+    "mean_planning_ms": 97.34453713020827
+  },
+  "tree_scorer_cheap": {
+    "success_rate": 18.0,
+    "num_successes": 9,
+    "mean_planning_ms": 450.1698628881631,
+    "tree_timing": {
+      "total_ms": {
+        "mean": 450.1330814338279,
+        "std": 13.39950246139272,
+        "p50": 449.48737882077694
+      },
+      "root_ms": {
+        "mean": 364.67110389560395,
+        "std": 10.179368269713956,
+        "p50": 363.88019286096096
+      },
+      "expansion_ms": {
+        "mean": 72.87104087592576,
+        "std": 1.2628678389237005,
+        "p50": 72.561115026474
+      },
+      "effective_hz": 2.221565224254698,
+      "total_cem_calls": 8.0,
+      "total_nodes": 9.0
+    }
+  },
+  "tree_scorer_full": {
+    "success_rate": 16.0,
+    "num_successes": 8,
+    "mean_planning_ms": 742.0072309050621,
+    "tree_timing": {
+      "total_ms": {
+        "mean": 741.9687411339048,
+        "std": 19.295973756010387,
+        "p50": 740.9156728535891
+      },
+      "root_ms": {
+        "mean": 364.46773339405945,
+        "std": 10.236260475918506,
+        "p50": 362.46592551469803
+      },
+      "expansion_ms": {
+        "mean": 364.74918837337987,
+        "std": 10.066179409120062,
+        "p50": 364.7948447614908
+      },
+      "effective_hz": 1.3477656733513625,
+      "total_cem_calls": 8.0,
+      "total_nodes": 9.0
+    }
+  }
+}

@@ -81,7 +81,9 @@ class PlanningPipeline:
 
         # State
         self._goal_emb = None
+        self._obs_emb = None  # cached for scorer's progress signal
         self._compiled = False
+        self.scorer = None  # optional DreamScorer for multi-signal cost
         # Infer action dim from model's action encoder input channels
         self._action_dim = self.model.action_encoder.patch_embed.in_channels
 
@@ -162,6 +164,7 @@ class PlanningPipeline:
         # Encode observation
         t0 = time.perf_counter()
         obs_emb = self.encode(obs_tensor)
+        self._obs_emb = obs_emb  # cache for scorer's progress signal
         torch.cuda.synchronize()
         t_encode = (time.perf_counter() - t0) * 1000
 
@@ -327,10 +330,16 @@ class PlanningPipeline:
         pred = self.model.predict(emb[:, start:, :], act_emb)[:, -1:]
         emb = torch.cat([emb, pred], dim=1)
 
-        # Cost: MSE between last predicted embedding and goal
+        # Cost computation
         pred_emb = rearrange(emb, "(b s) t d -> b s t d", b=B, s=S)
-        goal_exp = goal_emb[:, -1:, :].unsqueeze(1).expand(B, S, 1, -1)
-        cost = ((pred_emb[:, :, -1:, :] - goal_exp) ** 2).sum(dim=-1).squeeze(-1)
+
+        if self.scorer is not None and self._obs_emb is not None:
+            # Multi-signal scoring (D4)
+            cost = self.scorer.score(pred_emb, self._obs_emb, goal_emb)
+        else:
+            # Default: MSE between last predicted embedding and goal
+            goal_exp = goal_emb[:, -1:, :].unsqueeze(1).expand(B, S, 1, -1)
+            cost = ((pred_emb[:, :, -1:, :] - goal_exp) ** 2).sum(dim=-1).squeeze(-1)
 
         if return_embs:
             return cost, pred_emb
