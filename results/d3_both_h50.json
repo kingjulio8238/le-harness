@@ -1,0 +1,41 @@
+{
+  "flat": {
+    "success_rate": 16.0,
+    "num_successes": 8,
+    "mean_planning_ms": 92.06989583080765,
+    "effective_hz": 10.861313472512787
+  },
+  "tree": {
+    "success_rate": 26.0,
+    "num_successes": 13,
+    "mean_planning_ms": 689.4718764841292,
+    "effective_hz": 1.4503854821452151,
+    "tree_timing": {
+      "total_ms": {
+        "mean": 689.4320311094996,
+        "std": 3.5355550386179533,
+        "p50": 688.9012083411217
+      },
+      "root_ms": {
+        "mean": 338.8370528379393,
+        "std": 1.0912794222913147,
+        "p50": 338.65623362362385
+      },
+      "expansion_ms": {
+        "mean": 338.42830943509506,
+        "std": 1.0924924277459191,
+        "p50": 338.23673240840435
+      },
+      "effective_hz": 1.450469306438671,
+      "total_cem_calls": 8.0,
+      "total_nodes": 9.0
+    },
+    "config": {
+      "num_roots": 4,
+      "max_depth": 2
+    }
+  },
+  "eval_budget": 50,
+  "num_eval": 50,
+  "seed": 42
+}
