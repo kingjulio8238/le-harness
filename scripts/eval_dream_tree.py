@@ -343,7 +343,7 @@ def main():
     parser.add_argument("--output-dir", default="/workspace/data/results")
 
     # Tree config
-    parser.add_argument("--num-roots", type=int, default=2,
+    parser.add_argument("--num-roots", type=int, default=4,
                         help="Number of diverse root CEM candidates to expand")
     parser.add_argument("--max-depth", type=int, default=2,
                         help="Tree depth (1=root only, 2=one expansion, 3=two expansions)")

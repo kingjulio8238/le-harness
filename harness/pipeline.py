@@ -244,27 +244,50 @@ class PlanningPipeline:
 
         return action
 
-    def _score_state(self, obs_emb: torch.Tensor, goal_emb: torch.Tensor) -> float:
-        """Cheaply score how plannable a state is by sampling random actions.
+    def _score_state(self, obs_emb: torch.Tensor, goal_emb: torch.Tensor,
+                     n_rounds: int = 1) -> float:
+        """Score how plannable a state is with lightweight CEM.
 
-        Runs a single round of random action sampling (no CEM iteration)
-        and returns the min cost. Used by DreamTree for depth scoring
-        without the overhead of full CEM optimization.
+        Runs n_rounds of CEM (sample, evaluate, refine) and returns the
+        min cost. With n_rounds=1, this is a single random sample pass.
+        With n_rounds=3-5, it's a mini-CEM that gives better signal.
+
+        Uses S=128 (same batch size as compiled path) for CUDA graph
+        compatibility.
 
         Args:
             obs_emb: (1, 1, D) state embedding to score
             goal_emb: (1, 1, D) goal embedding
+            n_rounds: number of CEM iterations (1=random, 3-5=mini-CEM)
 
         Returns:
-            float: min MSE cost across random samples
+            float: min MSE cost across best samples
         """
-        S = self.num_samples  # 128 — same batch size as compiled path
+        S = self.num_samples  # 128
         H = 1
         T = H + self.horizon
 
-        candidates = torch.randn(1, S, T, self._action_dim, device=obs_emb.device)
-        costs, _ = self._evaluate_candidates(obs_emb, goal_emb, candidates, S, H)
-        return float(costs.min())
+        mean = torch.zeros(1, T, self._action_dim, device=obs_emb.device)
+        var = torch.ones(1, T, self._action_dim, device=obs_emb.device)
+
+        best_cost = float("inf")
+        for _ in range(n_rounds):
+            noise = torch.randn(1, S, T, self._action_dim, device=obs_emb.device)
+            candidates = mean.unsqueeze(1) + noise * var.unsqueeze(1).sqrt()
+            candidates[:, 0] = mean
+
+            costs, _ = self._evaluate_candidates(obs_emb, goal_emb, candidates, S, H)
+
+            topk_vals, topk_inds = torch.topk(costs, k=self.topk, dim=1, largest=False)
+            topk_cands = candidates[0, topk_inds[0]]
+            mean = topk_cands.mean(dim=0, keepdim=True)
+            var = topk_cands.std(dim=0, keepdim=True)
+
+            round_best = float(topk_vals[0, 0])
+            if round_best < best_cost:
+                best_cost = round_best
+
+        return best_cost
 
     def _evaluate_candidates(
         self, obs_emb, goal_emb, candidates, S, H, return_embs: bool = False

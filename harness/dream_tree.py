@@ -57,7 +57,7 @@ class DreamTreePlanner:
     def __init__(
         self,
         pipeline,
-        num_roots: int = 2,
+        num_roots: int = 4,
         max_depth: int = 2,
         cheap_depth: bool = True,
     ):
@@ -67,6 +67,13 @@ class DreamTreePlanner:
         self.max_depth = max_depth
         self.cheap_depth = cheap_depth
         self._action_dim = pipeline._action_dim
+
+        # Cache uncompiled predictor for flexible depth scoring
+        # (compiled predictor uses CUDA graphs with fixed shapes)
+        predictor = pipeline.model.predictor
+        self._uncompiled_predictor = (
+            predictor._orig_mod if hasattr(predictor, '_orig_mod') else None
+        )
 
         self.timing = {"total_ms": [], "root_ms": [], "expansion_ms": []}
         self.stats = {"total_cem_calls": [], "total_nodes": []}
@@ -101,13 +108,17 @@ class DreamTreePlanner:
         best_action = root_candidates[0][0]
         best_value = float("inf")
 
+        # Cheap depth uses _score_state (S=128, same shape as compiled path).
+        # Full depth uses _cem_plan which needs return_terminal_emb (already compiled).
+        # No predictor swap needed for either path.
+
         for action, root_cost, terminal_emb in root_candidates:
             if self.max_depth >= 2:
                 if self.cheap_depth:
-                    # Single-pass random scoring — no CEM iteration
-                    d2_cost = self.pipeline._score_state(terminal_emb, goal_emb)
+                    # Mini-CEM scoring: 3 rounds of 128 samples (vs 15 for full CEM)
+                    d2_cost = self.pipeline._score_state(terminal_emb, goal_emb, n_rounds=3)
                 else:
-                    # Full CEM at depth (original, slower)
+                    # Full CEM at depth (compiled, slower)
                     _, d2_terminal = self.pipeline._cem_plan(
                         terminal_emb, goal_emb, return_terminal_emb=True
                     )
@@ -116,9 +127,6 @@ class DreamTreePlanner:
 
                 if self.max_depth >= 3:
                     if self.cheap_depth:
-                        # For depth 3, we need a terminal_emb from depth 2.
-                        # With cheap scoring we don't have one, so use depth-2
-                        # cost as the value (skip depth 3 in cheap mode).
                         value = d2_cost
                     else:
                         _, d3_terminal = self.pipeline._cem_plan(
@@ -135,6 +143,8 @@ class DreamTreePlanner:
             if value < best_value:
                 best_value = value
                 best_action = action
+
+        # No swap needed — both paths use compiled-compatible shapes
 
         t_expand = (time.perf_counter() - t_expand) * 1000
         t_total = (time.perf_counter() - t_start) * 1000
