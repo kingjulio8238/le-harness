@@ -166,7 +166,8 @@ class PlanningPipeline:
 
         # CEM planning with cached embeddings
         t0 = time.perf_counter()
-        action = self._cem_plan(obs_emb, self._goal_emb)
+        result = self._cem_plan(obs_emb, self._goal_emb)
+        action = result if isinstance(result, np.ndarray) else result[0]
         torch.cuda.synchronize()
         t_cem = (time.perf_counter() - t0) * 1000
 
@@ -180,15 +181,20 @@ class PlanningPipeline:
 
         return action
 
-    def _cem_plan(self, obs_emb: torch.Tensor, goal_emb: torch.Tensor) -> np.ndarray:
+    def _cem_plan(self, obs_emb: torch.Tensor, goal_emb: torch.Tensor,
+                  return_terminal_emb: bool = False):
         """Run CEM optimization with cached embeddings.
 
         Args:
             obs_emb: (1, 1, 192) observation embedding
             goal_emb: (1, 1, 192) goal embedding
+            return_terminal_emb: if True, also return the predicted terminal
+                embedding of the best trajectory
 
         Returns:
             action: (action_dim,) numpy array — first action from best plan
+            If return_terminal_emb:
+                (action, terminal_emb) where terminal_emb is (1, 1, D) tensor
         """
         S = self.num_samples
         H = 1  # history length (from obs)
@@ -200,6 +206,8 @@ class PlanningPipeline:
         mean = torch.zeros(1, T, self._action_dim, device=device)
         var = torch.ones(1, T, self._action_dim, device=device)
 
+        last_all_embs = None
+
         for cem_iter in range(self.n_steps):
             # Sample candidates
             noise = torch.randn(1, S, T, self._action_dim, device=device)
@@ -207,7 +215,10 @@ class PlanningPipeline:
             candidates[:, 0] = mean  # mean is always a candidate
 
             # Evaluate: rollout + cost
-            costs = self._evaluate_candidates(obs_emb, goal_emb, candidates, S, H)
+            costs, all_embs = self._evaluate_candidates(
+                obs_emb, goal_emb, candidates, S, H, return_embs=True
+            )
+            last_all_embs = all_embs  # (1, S, T_rollout, D)
 
             # Select top-k
             topk_vals, topk_inds = torch.topk(costs, k=self.topk, dim=1, largest=False)
@@ -217,13 +228,30 @@ class PlanningPipeline:
             mean = topk_cands.mean(dim=0, keepdim=True)
             var = topk_cands.std(dim=0, keepdim=True)
 
-        # Return first action from mean plan
-        return mean[0, 0].cpu().numpy()
+        action = mean[0, 0].cpu().numpy()
+
+        if return_terminal_emb:
+            # Get terminal embedding of the best candidate (index 0 = mean, which was injected)
+            # Re-evaluate the mean trajectory to get its exact terminal embedding
+            mean_candidate = mean.unsqueeze(1)  # (1, 1, T, action_dim)
+            _, mean_embs = self._evaluate_candidates(
+                obs_emb, goal_emb, mean_candidate, 1, H, return_embs=True
+            )
+            terminal_emb = mean_embs[:, :, -1:, :]  # (1, 1, 1, D) → squeeze to (1, 1, D)
+            terminal_emb = terminal_emb.squeeze(1)  # (1, 1, D)
+            return action, terminal_emb
+
+        return action
 
     def _evaluate_candidates(
-        self, obs_emb, goal_emb, candidates, S, H
-    ) -> torch.Tensor:
-        """Evaluate candidate action sequences via rollout + MSE cost."""
+        self, obs_emb, goal_emb, candidates, S, H, return_embs: bool = False
+    ):
+        """Evaluate candidate action sequences via rollout + MSE cost.
+
+        Returns:
+            costs: (B, S) tensor of MSE costs
+            If return_embs: (costs, all_embs) where all_embs is (B, S, T, D)
+        """
         B = 1
         horizon = self.horizon
 
@@ -258,7 +286,9 @@ class PlanningPipeline:
         goal_exp = goal_emb[:, -1:, :].unsqueeze(1).expand(B, S, 1, -1)
         cost = ((pred_emb[:, :, -1:, :] - goal_exp) ** 2).sum(dim=-1).squeeze(-1)
 
-        return cost
+        if return_embs:
+            return cost, pred_emb
+        return cost, None
 
     def get_timing_summary(self) -> dict:
         """Return timing statistics."""
