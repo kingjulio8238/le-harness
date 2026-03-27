@@ -1,0 +1,56 @@
+{
+  "image_flat": {
+    "success_rate": 56.00000000000001,
+    "num_successes": 28,
+    "num_eval": 50,
+    "mean_planning_ms": 206.99957182511076,
+    "effective_hz": 4.830927867062823,
+    "goal_mode": "image",
+    "tree": false
+  },
+  "image_tree_batch": {
+    "success_rate": 50.0,
+    "num_successes": 25,
+    "num_eval": 50,
+    "mean_planning_ms": 298.3684473596937,
+    "effective_hz": 3.3515608263847843,
+    "goal_mode": "image",
+    "tree": true
+  },
+  "coord_flat": {
+    "success_rate": 48.0,
+    "num_successes": 24,
+    "num_eval": 50,
+    "mean_planning_ms": 203.59127628670512,
+    "effective_hz": 4.9118018131177745,
+    "goal_mode": "coord",
+    "tree": false
+  },
+  "coord_tree_batch": {
+    "success_rate": 42.0,
+    "num_successes": 21,
+    "num_eval": 50,
+    "mean_planning_ms": 275.71128040954875,
+    "effective_hz": 3.626982539541269,
+    "goal_mode": "coord",
+    "tree": true
+  },
+  "clip_flat": {
+    "success_rate": 42.0,
+    "num_successes": 21,
+    "num_eval": 50,
+    "mean_planning_ms": 193.7032732046755,
+    "effective_hz": 5.16253537410984,
+    "goal_mode": "clip",
+    "tree": false
+  },
+  "clip_tree_batch": {
+    "success_rate": 48.0,
+    "num_successes": 24,
+    "num_eval": 50,
+    "mean_planning_ms": 275.69197077699545,
+    "effective_hz": 3.6272365755943263,
+    "goal_mode": "clip",
+    "tree": true
+  }
+}
