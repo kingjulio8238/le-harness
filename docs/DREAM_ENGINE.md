@@ -503,10 +503,195 @@ D5: Language Conditioning     ← not started, independent
 
 **Core result:** Tree search in latent space improves planning across tasks — +62% relative on PushT (26% vs 16%), +35% relative on TwoRoom (62% vs 46%). The tree's value comes from precise depth scoring (full CEM at depth), not from learned scorers. The tree amplifies signal quality — great with precise signals, fragile with noisy ones.
 
-**Next steps:**
-1. **Online value learning** — train scorer on actual planning outcomes, not MSE proxies
-2. **Batched CEM** — pipeline refactoring to cut tree latency from 689ms to ~250ms
-3. **D5: Language Conditioning** — independent, quick win
-4. **Cube/Reacher datasets** — collect to complete full 4-task validation
-
 **The thesis:** Small world models + smart dream infrastructure > large models + flat search.
+
+---
+
+## Next Steps: Making LeHarness Real
+
+Four things separate the current Dream Engine from something engineers would deploy. Each is independent — work on whichever is unblocked.
+
+---
+
+### N1: Batched CEM (Speed)
+
+**Problem:** Dream Tree runs at 1.5-2.8 Hz. The tree needs 8 sequential CEM calls (4 root + 4 depth). Each CEM is ~89ms compiled, but CUDA graphs with `reduce-overhead` mode require fixed tensor shapes, so the 8 calls can't be batched into a single GPU operation. Total: ~690ms per planning step.
+
+**Fix:** Refactor the CEM loop to batch all root CEM calls in parallel, then batch all depth CEM calls in parallel. Two batched GPU operations instead of eight sequential ones.
+
+**Architecture:**
+
+```
+Current (sequential, 689ms):
+  CEM_root_1 → CEM_root_2 → CEM_root_3 → CEM_root_4 →
+  CEM_depth_1 → CEM_depth_2 → CEM_depth_3 → CEM_depth_4
+
+Target (batched, ~200ms):
+  [CEM_root_1, CEM_root_2, CEM_root_3, CEM_root_4]  → single batched call
+  [CEM_depth_1, CEM_depth_2, CEM_depth_3, CEM_depth_4] → single batched call
+```
+
+**Steps:**
+1. **Modify `_cem_plan` to accept batched obs_emb**: Currently takes `(1, 1, D)`. Extend to `(B, 1, D)` where B = number of parallel CEM instances. All internal operations (candidate sampling, rollout, topk selection) already support batch dimensions — the bottleneck is that `_evaluate_candidates` expands along the sample dimension assuming B=1.
+2. **Modify `_evaluate_candidates` for multi-batch**: The rearrange operations `"b s t d -> (b s) t d"` already handle arbitrary B. The key change is ensuring the predictor's compiled forward pass handles `(B*S, seq, D)` instead of `(S, seq, D)`. This may require recompiling with a different batch size or using `torch.compile(dynamic=True)`.
+3. **Modify `DreamTree`**: Instead of a Python loop over roots, construct a batched obs_emb tensor `(4, 1, D)` and call `_cem_plan` once. Same for depth scoring.
+4. **Handle CUDA graph compatibility**: The `reduce-overhead` compile mode captures CUDA graphs with fixed shapes. Batched CEM changes the shapes. Options: (a) recompile with `mode="default"` (no CUDA graphs, ~2x slower per call but batching compensates), (b) use `torch.compile(dynamic=True)` to handle variable batch sizes, (c) compile separate graphs for B=1 and B=4.
+5. **Benchmark**: Measure latency for batched vs sequential tree at matched quality (4 roots, full depth). Target: <250ms total → ~4-5 Hz.
+
+**Off-pod work:**
+- Refactor `_cem_plan` and `_evaluate_candidates` for batched obs_emb
+- Refactor `DreamTree.plan()` to construct batched tensors
+- Test with `torch.compile(dynamic=True)` vs fixed batch recompilation
+- Push to git
+
+**On-pod work:**
+- Benchmark batched tree vs sequential tree on PushT and TwoRoom
+- Profile with `nsys` to confirm batching actually parallelizes on GPU
+- Test different compile modes to find the best latency
+
+**Gate:** Dream Tree completes a planning step in <300ms with 4 roots + full depth. That's ~3.3 Hz, approaching real-time. If <200ms (~5 Hz), even better.
+
+**Estimated cost:** ~$2-4 (engineering iteration on pod).
+
+---
+
+### N2: Language Conditioning (D5)
+
+**Problem:** LeHarness only accepts goal images. Engineers want to say "push the block to the target" or "navigate to the green room."
+
+**Fix:** Frozen CLIP text encoder → small projection layer (512→192) → LeWM's goal embedding space. Everything downstream (CEM, tree, scoring) is unchanged.
+
+**Architecture:**
+
+```
+"navigate to the green room"
+         ↓
+  CLIP Text Encoder (frozen, ~150M params, runs once per instruction)
+         ↓
+  text_embedding (512-dim)
+         ↓
+  Learned linear projection (512 → 192, ~98K params)
+         ↓
+  goal_embedding (192-dim) ← same space as LeWM image goals
+         ↓
+  Dream Engine plans toward goal_embedding (unchanged)
+```
+
+**Steps:**
+1. **Collect (goal_image, goal_text) pairs**: For TwoRoom, generate synthetic text descriptions from goal states: "navigate to position (X, Y)" or "reach the target in the green room." These can be generated programmatically from the dataset's state columns — no manual annotation needed. For PushT (if dataset is re-downloaded): "push the T-block to position (X, Y) at angle θ."
+2. **Encode both modalities**: Run CLIP text encoder on goal_text, run LeWM encoder on goal_image. Collect ~5,000-10,000 pairs.
+3. **Train projection**: Linear layer (512→192), MSE loss between `projection(CLIP_text(goal_text))` and `LeWM_encoder(goal_image)`. This is a <1 minute training job.
+4. **Integrate into pipeline**: Add `plan_from_text(obs_image, goal_text)` method to `PlanningPipeline` that encodes the text via CLIP → projection, then runs the normal planning loop.
+5. **Evaluate**: Compare success rates with image goal vs text goal on the same episodes. Text path will be lossier but should be within 80% of image-conditioned performance.
+
+**Blocker:** Need a dataset with both images and text. TwoRoom doesn't have natural language annotations, but synthetic ones ("navigate to (X, Y)") are trivially generated from state data. This is sufficient for proving the mechanism works, even if the language is template-based.
+
+**Off-pod work:**
+- Implement `harness/language_encoder.py`: CLIP loading, projection layer, text→goal_emb pipeline
+- Write synthetic text generation script for TwoRoom (template-based from state data)
+- Write `scripts/train_language_projection.py`
+- Write `scripts/eval_language.py` comparing image vs text goals
+- Push to git
+
+**On-pod work:**
+- `pip install transformers` (for CLIP)
+- Generate (goal_image, goal_text) pairs from TwoRoom dataset
+- Train projection layer (~1 min)
+- Evaluate text-conditioned planning vs image-conditioned
+- Run Dream Tree with text goals to verify full stack works
+
+**Gate:** Text-conditioned planning achieves ≥80% of image-conditioned success rate on TwoRoom.
+
+**Estimated cost:** ~$2-4 (one pod session).
+
+---
+
+### N3: More Tasks (Generality)
+
+**Problem:** Dream Tree is validated on 2 tasks (PushT 2D manipulation, TwoRoom navigation). For engineers to trust it, it should work on 3D tasks too.
+
+**Missing data:**
+- Cube (OGBench): checkpoint on HF (`kingJulio/le-harness-data/cube_lewm.tar.zst`), dataset is 44GB (too large to download from Drive due to quota limits)
+- Reacher (DMControl): checkpoint on HF (`kingJulio/le-harness-data/reacher_lewm.tar.zst`), dataset is 22GB (download failed from Drive)
+
+**Options to unblock:**
+1. **Generate datasets yourself**: Run the environments with random/expert policies to collect data. The `stable-worldmodel` package includes environment wrappers. Would require training new LeWM checkpoints on the collected data.
+2. **Contact the LeWM authors**: Ask Lucas Maes (lucas.maes@mila.quebec) for direct dataset access or an alternative download link.
+3. **Use alternative benchmarks**: Find other JEPA-compatible environments with smaller datasets (e.g., MetaWorld, RoboSuite tasks).
+4. **Wait for Drive quota reset**: Google Drive download quotas reset periodically. Try again in 24-48 hours.
+
+**Steps (once data is available):**
+1. Upload dataset to HF (`huggingface-cli upload`)
+2. Download on pod from HF (datacenter speed)
+3. Run flat CEM baseline: `python eval.py --config-name=cube policy=ogb_cube/lewm`
+4. Run Dream Tree: `python scripts/eval_dream_tree.py --policy ogb_cube/lewm --config-name=cube --mode both`
+5. Compare results
+
+**Off-pod work:**
+- Secure dataset access (contact authors, retry Drive, or generate)
+- Upload to HF when obtained
+
+**On-pod work:**
+- Download from HF, decompress
+- Run benchmarks (flat CEM + Dream Tree)
+- ~1-2 hours per task
+
+**Gate:** Dream Tree outperforms flat CEM on at least 1 additional task beyond PushT and TwoRoom.
+
+**Estimated cost:** ~$2-4 per task (if data available).
+
+---
+
+### N4: Onboard Deployment (Jetson)
+
+**Problem:** Everything runs on RTX 4090 in the cloud. For a robot, it needs to run on a Jetson AGX Orin strapped to the chassis.
+
+**Hardware needed:** Jetson AGX Orin Developer Kit 64GB (~$2,000). Not currently available.
+
+**Expected performance** (based on known 4090-to-Orin ~3-5x scaling):
+
+| Component | RTX 4090 | AGX Orin (est.) |
+|-----------|----------|-----------------|
+| Flat CEM planning | 89ms | ~270-450ms |
+| Dream Tree (4R full) | 689ms | ~2-3.5s |
+| Dream Tree (batched, target) | ~200ms | ~600ms-1s |
+| Fast policy (if distilled) | ~5ms | ~15-25ms |
+
+Flat CEM would run at ~2-4 Hz on Orin. Dream Tree would need batched CEM (N1) first, then would run at ~1-1.5 Hz — not real-time for manipulation but usable for slow tasks (assembly, inspection).
+
+**Steps (when hardware is available):**
+1. **Install JetPack 6.2+** on the Orin (CUDA 12.x, TensorRT, cuDNN)
+2. **Install PyTorch for Jetson** from NVIDIA's pip index
+3. **Transfer checkpoints** from HF or pod
+4. **Build compiled models on-device**: `torch.compile` engines are not portable from x86. Must recompile on ARM/Orin.
+5. **Set power mode**: `nvpmodel` to MAXN (60W) for benchmarking
+6. **Benchmark**: Run flat CEM and Dream Tree, measure ms/decision end-to-end
+7. **Thermal testing**: Run under sustained load, check for throttling
+8. **Camera pipeline**: V4L2 capture on separate thread, GPU preprocessing (resize + normalize)
+9. **TensorRT export** (if torch.compile latency is insufficient): Export encoder and predictor to TRT FP16/INT8 engines built on-device
+
+**Off-pod work (before hardware arrives):**
+- Document the full deployment pipeline in `docs/JETSON.md`
+- Prepare a deployment script that handles: model download, compilation, warmup, benchmark
+- Consider INT8 quantization calibration (collect calibration data on pod, transfer to Jetson)
+
+**On-Jetson work:**
+- Everything in steps 1-9 above
+- Iterate on compilation settings (reduce-overhead may not work on Jetson — test default and max-autotune modes)
+
+**Gate:** Flat CEM runs at ≥2 Hz on AGX Orin. Dream Tree (batched) runs at ≥1 Hz. Both within 15% of RTX 4090 success rates.
+
+**Estimated cost:** ~$2,000 for hardware. No cloud cost.
+
+---
+
+## Next Steps Priority
+
+```
+N1: Batched CEM        ← highest impact, unblocked, pure engineering
+N2: Language (D5)       ← unblocked (synthetic text from TwoRoom state data)
+N3: More Tasks          ← blocked on dataset access
+N4: Jetson              ← blocked on hardware
+```
+
+**Recommended order:** N1 first (makes tree practical), then N2 (makes it usable). N3 and N4 are nice-to-have when blockers clear.
