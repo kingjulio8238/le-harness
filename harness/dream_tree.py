@@ -128,7 +128,7 @@ class DreamTreePlanner:
 
         if self.max_depth >= 2:
             if self.cheap_depth:
-                # Score each root's future with mini-CEM (still batched)
+                # Score each root's future with mini-CEM (sequential — _score_state doesn't support B>1)
                 depth_costs = []
                 for i in range(K):
                     c = self.pipeline._score_state(
