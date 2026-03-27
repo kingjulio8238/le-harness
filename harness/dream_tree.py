@@ -64,6 +64,7 @@ class DreamTreePlanner:
         max_depth: int = 2,
         cheap_depth: bool = True,
         batched: bool = False,
+        cem_steps: int | None = None,
     ):
         self.pipeline = pipeline
         self.device = pipeline.device
@@ -72,6 +73,9 @@ class DreamTreePlanner:
         self.cheap_depth = cheap_depth
         self.batched = batched
         self._action_dim = pipeline._action_dim
+        # Batched CEM converges in ~7 steps (1% cost gap vs 15).
+        # Default to 7 when batched to hit <300ms gate.
+        self.cem_steps = cem_steps if cem_steps is not None else (7 if batched else None)
 
         # Cache uncompiled predictor for flexible depth scoring
         # (compiled predictor uses CUDA graphs with fixed shapes)
@@ -94,10 +98,19 @@ class DreamTreePlanner:
         obs_emb = self.pipeline.encode(obs_tensor)   # (1, 1, D)
         goal_emb = self.pipeline.encode(goal_tensor)  # (1, 1, D)
 
+        # Temporarily override pipeline CEM iterations if cem_steps is set
+        orig_n_steps = None
+        if self.cem_steps is not None:
+            orig_n_steps = self.pipeline.n_steps
+            self.pipeline.n_steps = self.cem_steps
+
         if self.batched:
             action = self._plan_batched(obs_emb, goal_emb)
         else:
             action = self._plan_sequential(obs_emb, goal_emb)
+
+        if orig_n_steps is not None:
+            self.pipeline.n_steps = orig_n_steps
 
         t_total = (time.perf_counter() - t_start) * 1000
         self.timing["total_ms"].append(t_total)
