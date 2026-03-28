@@ -33,8 +33,10 @@ from sklearn import preprocessing
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from harness.pipeline import PlanningPipeline
+from harness.plan_result import PlanResult
 from harness.s15_loop import S15ControlLoop
 from harness.sim_components import SimVLM, SimMotorPolicy
+from harness.dream_tree import DreamTreePlanner
 
 
 def load_eval_config(config_name):
@@ -106,6 +108,63 @@ def setup_eval_env(cfg, args):
         eval_episodes, eval_start_steps, goal_offset
 
 
+class TreePlanResultWrapper:
+    """Wraps DreamTreePlanner to return PlanResult (for S15ControlLoop compatibility).
+
+    DreamTreePlanner.plan() returns np.ndarray. This wrapper runs the tree,
+    then also calls pipeline.plan() to get confidence signals, but uses
+    the tree's action instead of the pipeline's.
+    """
+
+    def __init__(self, pipeline, tree_planner):
+        self.pipeline = pipeline
+        self.tree = tree_planner
+        self._cached_goal_image = None
+        # Forward pipeline attributes needed by the control loop
+        self.device = pipeline.device
+        self._action_dim = pipeline._action_dim
+
+    def preprocess(self, img):
+        return self.pipeline.preprocess(img)
+
+    def encode(self, tensor):
+        return self.pipeline.encode(tensor)
+
+    def set_goal(self, goal_image_np):
+        self._cached_goal_image = goal_image_np
+        self.pipeline.set_goal(goal_image_np)
+
+    def set_goal_embedding(self, emb):
+        self._cached_goal_image = None  # embedding-only, no image for tree
+        self.pipeline.set_goal_embedding(emb)
+
+    def plan(self, obs_image_np, goal_image_np=None, record_timing=True):
+        """Run tree planning and wrap result as PlanResult with confidence."""
+        # Get confidence signals from pipeline (fast — already compiled)
+        pipeline_result = self.pipeline.plan(obs_image_np, goal_image_np, record_timing)
+
+        # Resolve goal image: explicit arg > cached from set_goal()
+        goal_img = goal_image_np if goal_image_np is not None else self._cached_goal_image
+
+        # Get action from tree planner (better action selection)
+        if goal_img is not None:
+            tree_action = self.tree.plan(obs_image_np, goal_img)
+        else:
+            # No goal image available (embedding-only goal) — fall back to pipeline
+            return pipeline_result
+
+        # Return tree's action with pipeline's confidence signals
+        return PlanResult(
+            action=tree_action,
+            planning_cost=pipeline_result.planning_cost,
+            confidence=pipeline_result.confidence,
+            terminal_embedding=pipeline_result.terminal_embedding,
+            planability=pipeline_result.planability,
+            planning_ms=pipeline_result.planning_ms,
+            replan_threshold=pipeline_result.replan_threshold,
+        )
+
+
 def run_baseline_episode(pipeline, motor, start_pixels, goal_pixels, max_steps):
     """Run baseline episode using SimMotorPolicy (no replanning, no drift)."""
     pipeline.set_goal(goal_pixels)
@@ -129,7 +188,7 @@ def run_baseline_episode(pipeline, motor, start_pixels, goal_pixels, max_steps):
 
 
 def run_s15_episode(pipeline, motor, start_pixels, goal_pixels,
-                    dataset, episode_indices, goal_step_idx, args):
+                    dataset, episode_indices, goal_step_idx, start_step, args):
     """Run S1.5 episode with real SimVLM + SimMotorPolicy (zero mocks)."""
     vlm = SimVLM(
         pipeline=pipeline,
@@ -137,7 +196,9 @@ def run_s15_episode(pipeline, motor, start_pixels, goal_pixels,
         dataset=dataset,
         episode_indices=episode_indices,
         goal_step=goal_step_idx,
+        start_step=start_step,
         replan_offset=args.replan_offset,
+        replan_strategy=args.replan_strategy,
     )
 
     loop = S15ControlLoop(
@@ -163,15 +224,23 @@ def main():
     parser.add_argument("--config-name", default="tworoom")
     parser.add_argument("--num-eval", type=int, default=50)
     parser.add_argument("--eval-budget", type=int, default=100)
-    parser.add_argument("--drift-threshold", type=float, default=0.5)
+    parser.add_argument("--drift-threshold", type=float, default=999999.0,
+                        help="MSE threshold for drift escalation (default: disabled, confidence-only)")
     parser.add_argument("--max-replans", type=int, default=10)
     parser.add_argument("--replan-offset", type=int, default=5)
+    parser.add_argument("--replan-strategy", default="waypoint",
+                        choices=["nearby", "waypoint", "persist"],
+                        help="SimVLM replan strategy")
     parser.add_argument("--num-samples", type=int, default=128)
     parser.add_argument("--n-steps", type=int, default=15)
     parser.add_argument("--cost-scale", type=float, default=200.0,
                         help="Normalizer for confidence: confidence = 1 - cost/cost_scale")
     parser.add_argument("--replan-threshold", type=float, default=0.05,
                         help="Confidence below which needs_replan triggers")
+    parser.add_argument("--tree", action="store_true",
+                        help="Use DreamTreePlanner instead of flat CEM")
+    parser.add_argument("--num-roots", type=int, default=4,
+                        help="Dream Tree root candidates (only with --tree)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", default="results/s15_integration_eval.json")
     args = parser.parse_args()
@@ -193,6 +262,20 @@ def main():
     )
     pipeline.warmup()
 
+    # Optionally wrap pipeline with Dream Tree
+    planner = pipeline
+    if args.tree:
+        tree = DreamTreePlanner(
+            pipeline, num_roots=args.num_roots, max_depth=2,
+            batched=True, cem_steps=7,
+        )
+        # Warmup tree
+        dummy = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+        tree.plan(dummy, dummy)
+        tree.reset_timing()
+        planner = TreePlanResultWrapper(pipeline, tree)
+        print(f"Using Dream Tree ({args.num_roots} roots, batched)")
+
     # Build motor policy (shared across all episodes, reset per episode)
     motor = SimMotorPolicy(world, process, pipeline._action_dim)
 
@@ -208,7 +291,7 @@ def main():
         )
 
         success, steps, mean_ms = run_baseline_episode(
-            pipeline, motor, start_pix, goal_pix, args.eval_budget
+            planner, motor, start_pix, goal_pix, args.eval_budget
         )
         baseline_results.append({"success": success, "steps": steps, "mean_ms": float(mean_ms)})
         status = "OK" if success else "FAIL"
@@ -228,8 +311,8 @@ def main():
         )
 
         stats = run_s15_episode(
-            pipeline, motor, start_pix, goal_pix,
-            dataset, ep_indices, goal_step_idx, args
+            planner, motor, start_pix, goal_pix,
+            dataset, ep_indices, goal_step_idx, start_step, args
         )
         s15_results.append(stats)
         status = "OK" if stats.success else "FAIL"
@@ -274,9 +357,12 @@ def main():
             "drift_threshold": args.drift_threshold,
             "max_replans": args.max_replans,
             "replan_offset": args.replan_offset,
+            "replan_strategy": args.replan_strategy,
             "eval_budget": args.eval_budget,
             "cost_scale": args.cost_scale,
             "replan_threshold": args.replan_threshold,
+            "tree": args.tree,
+            "num_roots": args.num_roots if args.tree else None,
             "seed": args.seed,
         },
     }

@@ -19,9 +19,13 @@ from omegaconf import OmegaConf
 class SimVLM:
     """Dataset-grounded S2 VLM that provides real goals.
 
-    Provides initial goal from the dataset. On replan requests, selects
-    an alternative goal from nearby dataset states — simulating a VLM
-    that reassesses the scene and adjusts the subgoal.
+    Provides initial goal from the dataset. On replan requests, uses
+    one of several strategies to provide an adjusted goal.
+
+    Replan strategies:
+        "nearby" — select an earlier goal from the dataset (original behavior)
+        "waypoint" — provide a midpoint subgoal between current obs and goal
+        "persist" — return the same goal (VLM insists, let planner keep trying)
 
     This is not a mock: it uses real dataset images/embeddings and
     real pipeline encoding.
@@ -34,7 +38,9 @@ class SimVLM:
         dataset=None,
         episode_indices: np.ndarray = None,
         goal_step: int = None,
+        start_step: int = None,
         replan_offset: int = 5,
+        replan_strategy: str = "waypoint",
     ):
         """
         Args:
@@ -43,15 +49,18 @@ class SimVLM:
             dataset: HDF5Dataset (optional — enables replan with alternative goals).
             episode_indices: indices for the current episode in the dataset.
             goal_step: step index of the primary goal within the episode.
-            replan_offset: on replan, how many steps earlier/later to sample
-                an alternative goal from the dataset.
+            start_step: step index of the start state within the episode.
+            replan_offset: for "nearby" strategy, how many steps earlier to sample.
+            replan_strategy: "nearby" | "waypoint" | "persist"
         """
         self.pipeline = pipeline
         self.goal_image = goal_image
         self.dataset = dataset
         self.episode_indices = episode_indices
         self.goal_step = goal_step
+        self.start_step = start_step
         self.replan_offset = replan_offset
+        self.replan_strategy = replan_strategy
 
         # Encode the primary goal
         with torch.inference_mode():
@@ -74,24 +83,33 @@ class SimVLM:
         return {"type": "embedding", "value": self._goal_emb}
 
     def replan(self, reason: str, obs: np.ndarray = None, **kwargs) -> dict:
-        """Replan by selecting an alternative goal from the dataset.
+        """Replan using the configured strategy.
 
-        If dataset is available, selects a nearby goal image (offset by
-        replan_offset steps) and re-encodes it. This simulates a VLM
-        that reassesses the scene and adjusts its subgoal.
-
-        If dataset is not available, re-encodes the original goal image
-        (equivalent to VLM insisting on the same goal after re-evaluation).
+        Args:
+            reason: "low_confidence" or "drift_detected"
+            obs: current observation image (used by "waypoint" strategy)
+            **kwargs: context (planning_cost, confidence, step, etc.)
         """
         self._replan_count += 1
         self._replan_history.append({
             "reason": reason,
             "step": kwargs.get("step"),
+            "strategy": self.replan_strategy,
             **kwargs,
         })
 
+        if self.replan_strategy == "nearby":
+            return self._replan_nearby()
+        elif self.replan_strategy == "waypoint":
+            return self._replan_waypoint(obs)
+        elif self.replan_strategy == "persist":
+            return self._replan_persist()
+        else:
+            return self._replan_persist()
+
+    def _replan_nearby(self) -> dict:
+        """Select an earlier goal from the dataset."""
         if self.dataset is not None and self.episode_indices is not None and self.goal_step is not None:
-            # Select an alternative goal from nearby dataset states
             alt_step = max(0, self.goal_step - self.replan_offset * self._replan_count)
             alt_step = min(alt_step, len(self.episode_indices) - 1)
             alt_row = self.dataset.get_row_data(int(self.episode_indices[alt_step]))
@@ -104,11 +122,43 @@ class SimVLM:
                 alt_emb = self.pipeline.encode(alt_tensor)
             return {"type": "embedding", "value": alt_emb}
 
-        # Fallback: re-encode original goal (VLM re-confirms its goal)
-        with torch.inference_mode():
-            goal_tensor = self.pipeline.preprocess(self.goal_image)
-            emb = self.pipeline.encode(goal_tensor)
-        return {"type": "embedding", "value": emb}
+        return self._replan_persist()
+
+    def _replan_waypoint(self, obs: np.ndarray = None) -> dict:
+        """Provide a midpoint subgoal between current observation and final goal.
+
+        If dataset is available, selects the observation at the midpoint between
+        the current position in the episode and the goal step. This gives the
+        planner a closer, more achievable target.
+
+        Falls back to persist if obs is not available or dataset is missing.
+        """
+        if (self.dataset is not None and self.episode_indices is not None
+                and self.goal_step is not None and self.start_step is not None):
+            # Estimate current position: start + elapsed steps
+            current_est = min(
+                self.start_step + (self._replan_count * 5),  # rough estimate
+                self.goal_step - 1,
+            )
+            # Midpoint between estimated current position and goal
+            mid_step = (current_est + self.goal_step) // 2
+            mid_step = max(0, min(mid_step, len(self.episode_indices) - 1))
+
+            mid_row = self.dataset.get_row_data(int(self.episode_indices[mid_step]))
+            mid_image = mid_row["pixels"]
+            if isinstance(mid_image, np.ndarray) and mid_image.dtype != np.uint8:
+                mid_image = (mid_image * 255).astype(np.uint8) if mid_image.max() <= 1.0 else mid_image.astype(np.uint8)
+
+            with torch.inference_mode():
+                mid_tensor = self.pipeline.preprocess(mid_image)
+                mid_emb = self.pipeline.encode(mid_tensor)
+            return {"type": "embedding", "value": mid_emb}
+
+        return self._replan_persist()
+
+    def _replan_persist(self) -> dict:
+        """Return the same goal embedding (VLM re-confirms its goal)."""
+        return {"type": "embedding", "value": self._goal_emb}
 
     def reset(self):
         self._replan_count = 0

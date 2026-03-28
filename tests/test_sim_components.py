@@ -87,7 +87,7 @@ class LightweightDataset:
 class TestSimVLM:
     """Test SimVLM logic using lightweight pipeline/dataset (no GPU)."""
 
-    def _make_sim_vlm(self, pipeline=None, dataset=None):
+    def _make_sim_vlm(self, pipeline=None, dataset=None, replan_strategy="nearby"):
         from harness.sim_components import SimVLM
 
         pipeline = pipeline or LightweightPipeline()
@@ -100,7 +100,9 @@ class TestSimVLM:
             dataset=dataset or LightweightDataset(),
             episode_indices=ep_indices,
             goal_step=30,
+            start_step=5,
             replan_offset=5,
+            replan_strategy=replan_strategy,
         )
 
     def test_satisfies_vlm_protocol(self):
@@ -173,6 +175,44 @@ class TestSimVLM:
         result = vlm.replan(reason="test")
         assert result["type"] == "embedding"
         assert result["value"].shape == (1, 1, 192)
+
+    # --- Strategy-specific tests ---
+
+    def test_nearby_strategy(self):
+        vlm = self._make_sim_vlm(replan_strategy="nearby")
+        result = vlm.replan(reason="test")
+        assert result["type"] == "embedding"
+        assert result["value"].shape == (1, 1, 192)
+        assert vlm.replan_history[0]["strategy"] == "nearby"
+
+    def test_waypoint_strategy(self):
+        vlm = self._make_sim_vlm(replan_strategy="waypoint")
+        obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+        result = vlm.replan(reason="test", obs=obs)
+        assert result["type"] == "embedding"
+        assert result["value"].shape == (1, 1, 192)
+        assert vlm.replan_history[0]["strategy"] == "waypoint"
+
+    def test_persist_strategy_returns_same_goal(self):
+        vlm = self._make_sim_vlm(replan_strategy="persist")
+        initial = vlm.get_initial_goal()["value"]
+        replanned = vlm.replan(reason="test")["value"]
+        assert torch.equal(initial, replanned)
+        assert vlm.replan_history[0]["strategy"] == "persist"
+
+    def test_waypoint_without_dataset_falls_back_to_persist(self):
+        from harness.sim_components import SimVLM
+        pipeline = LightweightPipeline()
+        goal_img = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+        vlm = SimVLM(pipeline=pipeline, goal_image=goal_img, replan_strategy="waypoint")
+        initial = vlm.get_initial_goal()["value"]
+        result = vlm.replan(reason="test")
+        assert torch.equal(initial, result["value"])
+
+    def test_strategy_recorded_in_history(self):
+        vlm = self._make_sim_vlm(replan_strategy="waypoint")
+        vlm.replan(reason="low_confidence", step=3)
+        assert vlm.replan_history[0]["strategy"] == "waypoint"
 
 
 # ==================== SimMotorPolicy Protocol Tests ====================

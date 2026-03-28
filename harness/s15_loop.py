@@ -197,7 +197,7 @@ class S15ControlLoop:
         pipeline,
         vlm: "VLMProtocol",
         motor: "MotorProtocol",
-        drift_threshold: float = 0.1,
+        drift_threshold: float = float("inf"),
         drift_window: int = 5,
         max_replans_per_episode: int = 10,
     ):
