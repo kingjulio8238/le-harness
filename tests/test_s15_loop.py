@@ -20,7 +20,6 @@ class MockPipeline:
         self._default_confidence = confidence
         self._default_cost = planning_cost
         self._plan_count = 0
-        # Allow per-step overrides
         self._step_overrides = {}
 
     def preprocess(self, img):
@@ -59,12 +58,25 @@ class MockPipeline:
         )
 
     def override_step(self, step: int, **kwargs):
-        """Set overrides for a specific plan() call index."""
         self._step_overrides[step] = kwargs
 
     def reset_plan_count(self):
         self._plan_count = 0
         self._step_overrides.clear()
+
+
+class SuccessMotorPolicy(MockMotorPolicy):
+    """MockMotorPolicy that reports success after N executions."""
+
+    def __init__(self, succeed_after: int = 3):
+        super().__init__()
+        self._succeed_after = succeed_after
+
+    def execute(self, action: np.ndarray) -> np.ndarray:
+        obs = super().execute(action)
+        if self.execution_count >= self._succeed_after:
+            self._is_success = True
+        return obs
 
 
 # ==================== MockVLM Tests ====================
@@ -96,7 +108,7 @@ class TestMockVLM:
         vlm = MockVLM(goal_embedding=emb, replan_strategy="noisy")
         result = vlm.replan(reason="drift_detected")
         assert result["type"] == "embedding"
-        assert not torch.equal(result["value"], emb)  # should be different (noise)
+        assert not torch.equal(result["value"], emb)
         assert vlm.replan_count == 1
 
     def test_replan_callback(self):
@@ -131,26 +143,32 @@ class TestMockVLM:
 # ==================== MockMotorPolicy Tests ====================
 
 class TestMockMotorPolicy:
-    def test_execute_records(self):
+    def test_execute_records_and_returns_obs(self):
         motor = MockMotorPolicy()
         action = np.array([1.0, 2.0, 3.0])
-        motor.execute(action)
+        obs = motor.execute(action)
         assert motor.execution_count == 1
         np.testing.assert_array_equal(motor.history[0], action)
+        assert obs.shape == (224, 224, 3)
+        assert obs.dtype == np.uint8
 
     def test_execute_copies(self):
-        """Motor should copy actions, not reference them."""
         motor = MockMotorPolicy()
         action = np.array([1.0, 2.0])
         motor.execute(action)
-        action[0] = 999.0  # mutate original
-        assert motor.history[0][0] == 1.0  # copy should be unaffected
+        action[0] = 999.0
+        assert motor.history[0][0] == 1.0
+
+    def test_is_success_default_false(self):
+        motor = MockMotorPolicy()
+        assert motor.is_success is False
 
     def test_reset(self):
         motor = MockMotorPolicy()
         motor.execute(np.zeros(3))
         motor.reset()
         assert motor.execution_count == 0
+        assert motor.is_success is False
 
 
 # ==================== EpisodeStats Tests ====================
@@ -185,50 +203,37 @@ class TestS15ControlLoop:
         motor = motor or MockMotorPolicy()
         return S15ControlLoop(pipeline, vlm, motor, **kwargs)
 
-    def _dummy_get_next_obs(self, action):
-        return np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
-
     def test_runs_to_max_steps(self):
         loop = self._make_loop()
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=10)
+        stats = loop.run_episode(obs, max_steps=10)
         assert stats.steps == 10
         assert stats.success is False
 
-    def test_success_fn_stops_early(self):
-        loop = self._make_loop()
+    def test_success_stops_early(self):
+        motor = SuccessMotorPolicy(succeed_after=3)
+        loop = self._make_loop(motor=motor)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
-        call_count = 0
 
-        def always_succeed(obs):
-            nonlocal call_count
-            call_count += 1
-            return call_count >= 3  # succeed on 3rd step
-
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=100,
-                                 success_fn=always_succeed)
+        stats = loop.run_episode(obs, max_steps=100)
         assert stats.success is True
         assert stats.steps == 3
 
     def test_confidence_replan_triggers(self):
-        pipeline = MockPipeline(confidence=0.1)  # always low confidence
+        pipeline = MockPipeline(confidence=0.1)
         loop = self._make_loop(pipeline=pipeline, max_replans_per_episode=3)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=10)
-
-        # Low confidence triggers replanning, but loop still makes progress
-        # (after max_replans, it stops replanning and executes anyway)
+        stats = loop.run_episode(obs, max_steps=10)
         assert stats.replans_confidence > 0
-        assert stats.replans_confidence <= 3  # capped by max_replans
+        assert stats.replans_confidence <= 3
 
     def test_no_replan_on_high_confidence(self):
-        pipeline = MockPipeline(confidence=0.9)  # always high
-        # Set very high drift threshold so random embeddings don't trigger
+        pipeline = MockPipeline(confidence=0.9)
         loop = self._make_loop(pipeline=pipeline, drift_threshold=1e6)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=5)
+        stats = loop.run_episode(obs, max_steps=5)
         assert stats.replans_confidence == 0
         assert stats.replans_drift == 0
 
@@ -238,7 +243,7 @@ class TestS15ControlLoop:
         loop = self._make_loop(pipeline=pipeline, motor=motor)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        loop.run_episode(obs, self._dummy_get_next_obs, max_steps=5)
+        loop.run_episode(obs, max_steps=5)
         assert motor.execution_count == 5
 
     def test_stats_tracking(self):
@@ -246,13 +251,11 @@ class TestS15ControlLoop:
         loop = self._make_loop(pipeline=pipeline)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=5)
+        stats = loop.run_episode(obs, max_steps=5)
         assert len(stats.confidences) == 5
         assert len(stats.planning_costs) == 5
         assert stats.mean_confidence == pytest.approx(0.75, abs=0.01)
         assert stats.total_planning_ms > 0
-
-    # test_vlm_reset_between_episodes replaced by test_vlm_reset_verified below
 
     def test_goal_set_from_embedding(self):
         pipeline = MockPipeline()
@@ -261,8 +264,7 @@ class TestS15ControlLoop:
         loop = self._make_loop(pipeline=pipeline, vlm=vlm)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        loop.run_episode(obs, self._dummy_get_next_obs, max_steps=1)
-        # Pipeline should have had its goal set
+        loop.run_episode(obs, max_steps=1)
         assert pipeline._goal_emb is not None
 
     def test_goal_set_from_image(self):
@@ -272,32 +274,29 @@ class TestS15ControlLoop:
         loop = self._make_loop(pipeline=pipeline, vlm=vlm)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        loop.run_episode(obs, self._dummy_get_next_obs, max_steps=1)
+        loop.run_episode(obs, max_steps=1)
         assert pipeline._goal_emb is not None
 
     def test_replan_with_step_specific_confidence(self):
-        """Steps 0-2 have high confidence, step 3 has low → replan on step 3."""
         pipeline = MockPipeline(confidence=0.9)
-        pipeline.override_step(3, confidence=0.1)  # low on step 3
+        pipeline.override_step(3, confidence=0.1)
 
         loop = self._make_loop(pipeline=pipeline, max_replans_per_episode=5)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=6)
-        assert stats.replans_confidence == 1  # only step 3 triggered
+        stats = loop.run_episode(obs, max_steps=6)
+        assert stats.replans_confidence == 1
 
     def test_max_replans_respected(self):
-        pipeline = MockPipeline(confidence=0.1)  # always wants to replan
+        pipeline = MockPipeline(confidence=0.1)
         loop = self._make_loop(pipeline=pipeline, max_replans_per_episode=2)
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=20)
+        stats = loop.run_episode(obs, max_steps=20)
         assert stats.replans_confidence <= 2
 
     def test_steps_equals_motor_plus_replans(self):
-        """stats.steps should equal motor executions + confidence replans."""
         pipeline = MockPipeline(confidence=0.9)
-        # Make step 2 and 4 low confidence
         pipeline.override_step(2, confidence=0.1)
         pipeline.override_step(4, confidence=0.1)
         motor = MockMotorPolicy()
@@ -307,30 +306,25 @@ class TestS15ControlLoop:
         )
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=8)
+        stats = loop.run_episode(obs, max_steps=8)
         assert stats.steps == 8
         assert motor.execution_count == stats.steps - stats.replans_confidence
 
     def test_drift_replan_triggers(self):
-        """Drift replanning fires when predicted != actual and trend increases."""
-        # Pipeline that returns consistent terminal embeddings far from obs
-        pipeline = MockPipeline(confidence=0.9)  # high confidence (no conf replans)
-        # Use a very low drift threshold so random embeddings trigger drift
+        pipeline = MockPipeline(confidence=0.9)
         loop = self._make_loop(
             pipeline=pipeline,
-            drift_threshold=0.001,  # tiny threshold
+            drift_threshold=0.001,
             drift_window=2,
             max_replans_per_episode=10,
         )
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=10)
-        # With random embeddings and very low threshold, drift should trigger
+        stats = loop.run_episode(obs, max_steps=10)
         assert stats.drift_events > 0
 
     def test_vlm_reset_verified(self):
-        """VLM replan_count resets between episodes."""
-        pipeline = MockPipeline(confidence=0.1)  # always triggers replan
+        pipeline = MockPipeline(confidence=0.1)
         vlm = MockVLM(goal_embedding=torch.randn(1, 1, 192))
         motor = MockMotorPolicy()
         loop = self._make_loop(
@@ -340,27 +334,23 @@ class TestS15ControlLoop:
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
 
         # First episode
-        stats1 = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=5)
-        replans_1 = stats1.total_replans
+        stats1 = loop.run_episode(obs, max_steps=5)
+        assert stats1.total_replans > 0
 
         # Second episode — VLM was reset
         pipeline.reset_plan_count()
-        stats2 = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=5)
-        # VLM replan_count should reflect only second episode
-        assert vlm.replan_count <= 3  # capped at max_replans
-        # Motor should also be fresh
+        stats2 = loop.run_episode(obs, max_steps=5)
+        assert vlm.replan_count <= 3
         assert motor.execution_count == stats2.steps - stats2.replans_confidence
 
     def test_zero_max_steps(self):
-        """max_steps=0 should return immediately."""
         loop = self._make_loop()
         obs = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
-        stats = loop.run_episode(obs, self._dummy_get_next_obs, max_steps=0)
+        stats = loop.run_episode(obs, max_steps=0)
         assert stats.steps == 0
         assert stats.success is False
 
     def test_unknown_goal_type_raises(self):
-        """_set_goal with unknown type should raise ValueError."""
         loop = self._make_loop()
         with pytest.raises(ValueError, match="Unknown goal type"):
             loop._set_goal({"type": "unknown", "value": None})

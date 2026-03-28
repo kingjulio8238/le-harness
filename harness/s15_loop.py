@@ -8,21 +8,32 @@ With closed-loop feedback:
   - Low confidence → ask VLM to replan
   - Drift detected → ask VLM to replan
 
-Usage:
-    from harness.s15_loop import S15ControlLoop, MockVLM, MockMotorPolicy
+Components implement protocols from harness/protocols.py:
+  - VLMProtocol: MockVLM (tests), SimVLM (sim), (future) RealVLM
+  - MotorProtocol: MockMotorPolicy (tests), SimMotorPolicy (sim)
 
-    vlm = MockVLM(goal_image=goal_img)
+Usage (on-pod with real components):
+    from harness.sim_components import SimVLM, SimMotorPolicy
+    from harness.s15_loop import S15ControlLoop
+
+    vlm = SimVLM(pipeline, goal_image=goal_img, dataset=dataset, ...)
+    motor = SimMotorPolicy(world, process, pipeline._action_dim)
+    loop = S15ControlLoop(pipeline, vlm, motor)
+
+    stats = loop.run_episode(initial_obs=obs_img, max_steps=100)
+
+Usage (unit tests with mocks):
+    from harness.s15_loop import MockVLM, MockMotorPolicy
+
+    vlm = MockVLM(goal_embedding=emb)
     motor = MockMotorPolicy()
     loop = S15ControlLoop(pipeline, vlm, motor)
 
-    stats = loop.run_episode(
-        initial_obs=obs_img,
-        max_steps=100,
-        success_fn=lambda obs: check_success(obs),
-    )
+    stats = loop.run_episode(initial_obs=obs, max_steps=10)
 """
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -30,15 +41,18 @@ import torch
 from harness.drift_detector import DriftDetector
 from harness.plan_result import PlanResult
 
+if TYPE_CHECKING:
+    from harness.protocols import VLMProtocol, MotorProtocol
 
-# ==================== Mock Components ====================
+
+# ==================== Mock Components (for unit tests) ====================
 
 
 class MockVLM:
-    """Mock S2 VLM that provides goals and handles replan requests.
+    """Mock S2 VLM for unit tests. Implements VLMProtocol.
 
-    For testing the S1.5 control loop without a real VLM.
-    Provides an initial goal and optionally adjusts goals on replan.
+    Provides fixed/noisy goals without real model inference.
+    For real evaluation, use SimVLM from harness/sim_components.py.
     """
 
     def __init__(
@@ -47,16 +61,6 @@ class MockVLM:
         goal_embedding: torch.Tensor = None,
         replan_strategy: str = "same",
     ):
-        """
-        Args:
-            goal_image: (H, W, 3) uint8 goal image.
-            goal_embedding: (1, 1, D) pre-computed goal embedding.
-                Provide one of goal_image or goal_embedding.
-            replan_strategy: How to respond to replan requests.
-                "same" — return the same goal (VLM insists).
-                "noisy" — add noise to the goal embedding.
-                "callback" — use a custom callback (set via on_replan).
-        """
         self.goal_image = goal_image
         self.goal_embedding = goal_embedding
         self.replan_strategy = replan_strategy
@@ -79,36 +83,21 @@ class MockVLM:
         self.replan_strategy = "callback"
 
     def get_initial_goal(self):
-        """Return the initial goal (image or embedding)."""
         if self.goal_embedding is not None:
             return {"type": "embedding", "value": self.goal_embedding}
         return {"type": "image", "value": self.goal_image}
 
     def replan(self, reason: str, obs: np.ndarray = None, **kwargs):
-        """Handle a replan request from S1.5.
-
-        Args:
-            reason: "low_confidence" or "drift_detected"
-            obs: current observation image
-            **kwargs: additional context (planning_cost, drift_mse, etc.)
-
-        Returns:
-            dict with "type" and "value" keys (same format as get_initial_goal)
-        """
         self._replan_count += 1
         self._replan_history.append({"reason": reason, "step": kwargs.get("step"), **kwargs})
 
         if self.replan_strategy == "same":
             return self.get_initial_goal()
-
         elif self.replan_strategy == "noisy" and self.goal_embedding is not None:
             noise = torch.randn_like(self.goal_embedding) * 0.01
-            noisy = self.goal_embedding + noise
-            return {"type": "embedding", "value": noisy}
-
+            return {"type": "embedding", "value": self.goal_embedding + noise}
         elif self.replan_strategy == "callback" and self._replan_callback is not None:
-            result = self._replan_callback(reason, obs, **kwargs)
-            return result
+            return self._replan_callback(reason, obs, **kwargs)
 
         return self.get_initial_goal()
 
@@ -118,18 +107,25 @@ class MockVLM:
 
 
 class MockMotorPolicy:
-    """Mock S1 motor policy that consumes actions.
+    """Mock S1 motor policy for unit tests. Implements MotorProtocol.
 
-    Records execution history for analysis. In a real system, this would
-    convert LeHarness actions to joint commands and send to the robot.
+    Records actions and returns random observations. For real evaluation,
+    use SimMotorPolicy from harness/sim_components.py.
     """
 
-    def __init__(self):
+    def __init__(self, obs_shape=(224, 224, 3)):
         self._history: list[np.ndarray] = []
+        self._obs_shape = obs_shape
+        self._is_success = False
 
-    def execute(self, action: np.ndarray):
-        """Execute an action (record it)."""
+    def execute(self, action: np.ndarray) -> np.ndarray:
+        """Record action and return a random observation."""
         self._history.append(action.copy())
+        return np.random.randint(0, 255, self._obs_shape, dtype=np.uint8)
+
+    @property
+    def is_success(self) -> bool:
+        return self._is_success
 
     @property
     def execution_count(self) -> int:
@@ -141,6 +137,7 @@ class MockMotorPolicy:
 
     def reset(self):
         self._history.clear()
+        self._is_success = False
 
 
 # ==================== Episode Statistics ====================
@@ -186,28 +183,24 @@ class S15ControlLoop:
     """S1.5 control loop orchestrator.
 
     Runs the full three-layer stack:
-        S2 (VLM) → GoalAdapter → S1.5 (LeHarness) → PlanResult → S1 (motor)
+        S2 (VLM) → S1.5 (LeHarness) → PlanResult → S1 (motor)
     with closed-loop confidence and drift feedback to S2.
+
+    Accepts any VLM/motor implementing VLMProtocol/MotorProtocol:
+        - MockVLM + MockMotorPolicy for unit tests
+        - SimVLM + SimMotorPolicy for on-pod sim evaluation
+        - (future) RealVLM + RealMotorPolicy for hardware
     """
 
     def __init__(
         self,
         pipeline,
-        vlm: MockVLM,
-        motor: MockMotorPolicy,
+        vlm: "VLMProtocol",
+        motor: "MotorProtocol",
         drift_threshold: float = 0.1,
         drift_window: int = 5,
         max_replans_per_episode: int = 10,
     ):
-        """
-        Args:
-            pipeline: PlanningPipeline (real or mock).
-            vlm: VLM that provides goals and handles replanning.
-            motor: Motor policy that executes actions.
-            drift_threshold: MSE threshold for drift detection.
-            drift_window: Window size for drift trend analysis.
-            max_replans_per_episode: Safety limit on replanning.
-        """
         self.pipeline = pipeline
         self.vlm = vlm
         self.motor = motor
@@ -228,19 +221,16 @@ class S15ControlLoop:
     def run_episode(
         self,
         initial_obs: np.ndarray,
-        get_next_obs,
         max_steps: int = 100,
-        success_fn=None,
     ) -> EpisodeStats:
         """Run a single S1.5 episode.
 
+        The motor policy handles environment stepping and returns observations.
+        Success is determined by motor.is_success.
+
         Args:
             initial_obs: (H, W, 3) starting observation image.
-            get_next_obs: callable(action) -> obs_image. Executes action
-                in the environment and returns the next observation.
             max_steps: maximum planning steps per episode.
-            success_fn: callable(obs) -> bool. Checks if task is complete.
-                If None, episode runs to max_steps.
 
         Returns:
             EpisodeStats with per-step tracking data.
@@ -280,11 +270,8 @@ class S15ControlLoop:
                 self._set_goal(new_goal)
                 continue  # re-plan with new goal before executing
 
-            # S1: Execute
-            self.motor.execute(result.action)
-
-            # Environment: get next observation
-            next_obs = get_next_obs(result.action)
+            # S1: Execute action → get next observation from motor
+            next_obs = self.motor.execute(result.action)
 
             # Drift detection (compare predicted terminal vs actual)
             if prev_result is not None:
@@ -313,8 +300,8 @@ class S15ControlLoop:
             prev_result = result
             obs = next_obs
 
-            # Check success
-            if success_fn is not None and success_fn(obs):
+            # Check success via motor policy
+            if self.motor.is_success:
                 stats.success = True
                 break
 
