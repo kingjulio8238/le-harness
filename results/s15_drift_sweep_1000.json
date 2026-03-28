@@ -1,0 +1,130 @@
+{
+  "baseline": {
+    "success_rate": 80.0,
+    "num_eval": 20,
+    "results": [
+      {
+        "success": true,
+        "steps": 1,
+        "mean_ms": 109.35312230139971
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 104.84261986799538
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 109.73188082687557
+      },
+      {
+        "success": true,
+        "steps": 19,
+        "mean_ms": 106.27402575980676
+      },
+      {
+        "success": true,
+        "steps": 26,
+        "mean_ms": 105.06384894968225
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 103.6172135360539
+      },
+      {
+        "success": true,
+        "steps": 1,
+        "mean_ms": 102.97598969191313
+      },
+      {
+        "success": true,
+        "steps": 3,
+        "mean_ms": 113.68543530503909
+      },
+      {
+        "success": true,
+        "steps": 3,
+        "mean_ms": 102.23222803324461
+      },
+      {
+        "success": true,
+        "steps": 10,
+        "mean_ms": 104.7369122505188
+      },
+      {
+        "success": true,
+        "steps": 7,
+        "mean_ms": 101.92026357565608
+      },
+      {
+        "success": true,
+        "steps": 7,
+        "mean_ms": 110.3256701358727
+      },
+      {
+        "success": true,
+        "steps": 4,
+        "mean_ms": 120.09143899194896
+      },
+      {
+        "success": true,
+        "steps": 2,
+        "mean_ms": 102.42676082998514
+      },
+      {
+        "success": true,
+        "steps": 3,
+        "mean_ms": 102.32415236532688
+      },
+      {
+        "success": true,
+        "steps": 17,
+        "mean_ms": 103.51468776078785
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 104.37239993363619
+      },
+      {
+        "success": true,
+        "steps": 20,
+        "mean_ms": 103.32131395116448
+      },
+      {
+        "success": true,
+        "steps": 76,
+        "mean_ms": 109.36923141248133
+      },
+      {
+        "success": true,
+        "steps": 2,
+        "mean_ms": 104.24379538744688
+      }
+    ]
+  },
+  "s15": {
+    "success_rate": 75.0,
+    "num_eval": 20,
+    "total_replans_confidence": 24,
+    "total_replans_drift": 0,
+    "total_drift_events": 0,
+    "mean_confidence": 0.8150072169198974,
+    "mean_planning_cost": 38.208287204599756,
+    "mean_drift_mse": 295.86148996209585
+  },
+  "config": {
+    "policy": "tworoom/lewm",
+    "num_samples": 128,
+    "n_steps": 15,
+    "drift_threshold": 1000.0,
+    "max_replans": 10,
+    "replan_offset": 5,
+    "eval_budget": 100,
+    "cost_scale": 200.0,
+    "replan_threshold": 0.05,
+    "seed": 42
+  }
+}

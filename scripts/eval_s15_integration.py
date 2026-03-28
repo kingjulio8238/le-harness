@@ -70,7 +70,8 @@ def setup_eval_env(cfg, args):
 
     # World environment
     world_cfg = OmegaConf.to_container(cfg.world, resolve=True, throw_on_missing=False)
-    world_cfg["max_episode_steps"] = 2 * args.eval_budget
+    # frameskip=5 means each planning step = 5 env steps
+    world_cfg["max_episode_steps"] = 5 * args.eval_budget + 10
     world_cfg["num_envs"] = 1
     world = swm.World(**world_cfg, image_shape=(224, 224))
 
@@ -120,6 +121,9 @@ def run_baseline_episode(pipeline, motor, start_pixels, goal_pixels, max_steps):
 
         if motor.is_success:
             return True, step + 1, np.mean(planning_times)
+        if motor.is_done:
+            # Truncated (hit max_episode_steps) — not a success
+            break
 
     return False, max_steps, np.mean(planning_times) if planning_times else 0.0
 
@@ -164,6 +168,10 @@ def main():
     parser.add_argument("--replan-offset", type=int, default=5)
     parser.add_argument("--num-samples", type=int, default=128)
     parser.add_argument("--n-steps", type=int, default=15)
+    parser.add_argument("--cost-scale", type=float, default=200.0,
+                        help="Normalizer for confidence: confidence = 1 - cost/cost_scale")
+    parser.add_argument("--replan-threshold", type=float, default=0.05,
+                        help="Confidence below which needs_replan triggers")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", default="results/s15_integration_eval.json")
     args = parser.parse_args()
@@ -180,6 +188,8 @@ def main():
         args.policy,
         num_samples=args.num_samples,
         n_steps=args.n_steps,
+        cost_scale=args.cost_scale,
+        replan_threshold=args.replan_threshold,
     )
     pipeline.warmup()
 
@@ -265,6 +275,8 @@ def main():
             "max_replans": args.max_replans,
             "replan_offset": args.replan_offset,
             "eval_budget": args.eval_budget,
+            "cost_scale": args.cost_scale,
+            "replan_threshold": args.replan_threshold,
             "seed": args.seed,
         },
     }

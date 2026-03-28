@@ -1,0 +1,280 @@
+{
+  "baseline": {
+    "success_rate": 68.0,
+    "num_eval": 50,
+    "results": [
+      {
+        "success": true,
+        "steps": 6,
+        "mean_ms": 107.70714407165845
+      },
+      {
+        "success": true,
+        "steps": 8,
+        "mean_ms": 105.91190319973975
+      },
+      {
+        "success": true,
+        "steps": 1,
+        "mean_ms": 106.60090018063784
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 109.52271793037653
+      },
+      {
+        "success": true,
+        "steps": 1,
+        "mean_ms": 105.16079142689705
+      },
+      {
+        "success": true,
+        "steps": 9,
+        "mean_ms": 108.80810177574556
+      },
+      {
+        "success": true,
+        "steps": 2,
+        "mean_ms": 105.18080228939652
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 108.39739747345448
+      },
+      {
+        "success": true,
+        "steps": 93,
+        "mean_ms": 109.89015931964562
+      },
+      {
+        "success": true,
+        "steps": 4,
+        "mean_ms": 101.9924737047404
+      },
+      {
+        "success": true,
+        "steps": 25,
+        "mean_ms": 101.84319194406271
+      },
+      {
+        "success": true,
+        "steps": 38,
+        "mean_ms": 104.31455124757792
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 108.04050204344094
+      },
+      {
+        "success": true,
+        "steps": 3,
+        "mean_ms": 106.23655933886766
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 106.47097117267549
+      },
+      {
+        "success": true,
+        "steps": 7,
+        "mean_ms": 106.41235632023641
+      },
+      {
+        "success": true,
+        "steps": 4,
+        "mean_ms": 111.9967345148325
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 109.757249513641
+      },
+      {
+        "success": true,
+        "steps": 4,
+        "mean_ms": 107.091712532565
+      },
+      {
+        "success": true,
+        "steps": 13,
+        "mean_ms": 112.67739620346289
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 106.66495623067021
+      },
+      {
+        "success": true,
+        "steps": 12,
+        "mean_ms": 107.80711440990369
+      },
+      {
+        "success": true,
+        "steps": 10,
+        "mean_ms": 107.19380034133792
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 109.32794679887593
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 110.30960571020842
+      },
+      {
+        "success": true,
+        "steps": 1,
+        "mean_ms": 104.15024496614933
+      },
+      {
+        "success": true,
+        "steps": 1,
+        "mean_ms": 143.16489174962044
+      },
+      {
+        "success": true,
+        "steps": 12,
+        "mean_ms": 109.19325472787023
+      },
+      {
+        "success": true,
+        "steps": 9,
+        "mean_ms": 115.26624258193705
+      },
+      {
+        "success": true,
+        "steps": 4,
+        "mean_ms": 120.09038752876222
+      },
+      {
+        "success": true,
+        "steps": 5,
+        "mean_ms": 105.2821109071374
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 109.29318665526807
+      },
+      {
+        "success": true,
+        "steps": 1,
+        "mean_ms": 105.38023244589567
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 108.1290382053703
+      },
+      {
+        "success": true,
+        "steps": 2,
+        "mean_ms": 103.81819261237979
+      },
+      {
+        "success": true,
+        "steps": 89,
+        "mean_ms": 107.07243907610687
+      },
+      {
+        "success": true,
+        "steps": 2,
+        "mean_ms": 102.82945679500699
+      },
+      {
+        "success": true,
+        "steps": 2,
+        "mean_ms": 102.36878925934434
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 106.41017831861973
+      },
+      {
+        "success": true,
+        "steps": 27,
+        "mean_ms": 113.71058746482487
+      },
+      {
+        "success": true,
+        "steps": 3,
+        "mean_ms": 107.76827639589708
+      },
+      {
+        "success": true,
+        "steps": 23,
+        "mean_ms": 110.59350342206334
+      },
+      {
+        "success": true,
+        "steps": 1,
+        "mean_ms": 153.17827835679054
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 113.46318490803242
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 111.08749245293438
+      },
+      {
+        "success": true,
+        "steps": 11,
+        "mean_ms": 111.03639277544889
+      },
+      {
+        "success": true,
+        "steps": 27,
+        "mean_ms": 121.06598634272814
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 111.89996846951544
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 111.66247172281146
+      },
+      {
+        "success": false,
+        "steps": 100,
+        "mean_ms": 107.7697489131242
+      }
+    ]
+  },
+  "s15": {
+    "success_rate": 64.0,
+    "num_eval": 50,
+    "total_replans_confidence": 49,
+    "total_replans_drift": 9,
+    "total_drift_events": 11,
+    "mean_confidence": 0.8094888765761629,
+    "mean_planning_cost": 39.315953917991486,
+    "mean_drift_mse": 313.8759919899714
+  },
+  "config": {
+    "policy": "tworoom/lewm",
+    "num_samples": 128,
+    "n_steps": 15,
+    "drift_threshold": 500.0,
+    "max_replans": 10,
+    "replan_offset": 5,
+    "eval_budget": 100,
+    "cost_scale": 200.0,
+    "replan_threshold": 0.05,
+    "seed": 42
+  }
+}

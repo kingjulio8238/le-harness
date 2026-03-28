@@ -304,6 +304,9 @@ class S15ControlLoop:
             if self.motor.is_success:
                 stats.success = True
                 break
+            # Check truncation (env hit max_episode_steps)
+            if hasattr(self.motor, 'is_done') and self.motor.is_done:
+                break
 
         stats.finalize()
         return stats

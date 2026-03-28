@@ -1,0 +1,11 @@
+{
+  "flat": {
+    "success_rate": 45.0,
+    "num_successes": 9,
+    "mean_planning_ms": 136.61043591220195,
+    "effective_hz": 7.32008497976457
+  },
+  "eval_budget": 50,
+  "num_eval": 20,
+  "seed": 123
+}

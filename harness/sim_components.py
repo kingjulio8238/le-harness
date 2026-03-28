@@ -142,6 +142,7 @@ class SimMotorPolicy:
 
         self._history: list[np.ndarray] = []
         self._is_success = False
+        self._truncated = False
         self._env_steps = 0
 
     @property
@@ -190,6 +191,8 @@ class SimMotorPolicy:
 
             if isinstance(terminated, (list, np.ndarray)):
                 terminated = bool(terminated[0])
+            if isinstance(truncated, (list, np.ndarray)):
+                truncated = bool(truncated[0])
             if isinstance(info, (list, tuple)):
                 step_info = info[0] if info else {}
             elif isinstance(info, dict):
@@ -199,13 +202,25 @@ class SimMotorPolicy:
 
             if terminated or step_info.get("is_success", False):
                 self._is_success = True
+                break
+
+            if truncated:
+                # Episode hit max_episode_steps — env auto-resets, stop stepping
+                self._truncated = True
+                break
 
         obs = self.world.envs.render()[0]
         return obs
 
+    @property
+    def is_done(self) -> bool:
+        """Whether the episode is over (success or truncation)."""
+        return self._is_success or self._truncated
+
     def reset(self):
         self._history.clear()
         self._is_success = False
+        self._truncated = False
         self._env_steps = 0
 
     def reset_env(self, cfg, dataset, episode_idx, col_name,
@@ -233,7 +248,15 @@ class SimMotorPolicy:
         if isinstance(goal_pixels, np.ndarray) and goal_pixels.dtype != np.uint8:
             goal_pixels = (goal_pixels * 255).astype(np.uint8) if goal_pixels.max() <= 1.0 else goal_pixels.astype(np.uint8)
 
-        # Reset env
+        # Reset env — clear autoreset flag that gymnasium sets after terminated=True
+        # Walk to the SyncVectorEnv (has _autoreset_envs) and clear it BEFORE reset
+        env = self.world.envs
+        while hasattr(env, 'env'):
+            if hasattr(env, '_autoreset_envs'):
+                env._autoreset_envs[:] = False
+            env = env.env
+        if hasattr(env, '_autoreset_envs'):
+            env._autoreset_envs[:] = False
         self.world.envs.reset()
         unwrapped_env = self.world.envs.envs[0].unwrapped
 
