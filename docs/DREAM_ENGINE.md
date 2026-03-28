@@ -703,8 +703,22 @@ All combinations of goal mode (image/coord/CLIP) and planner (flat CEM/batched t
 N1: Batched CEM        ← DONE (282ms, 3.5 Hz)
 N2: Language (D5)       ← DONE (104% of image, both CLIP and coord paths)
 Integration            ← DONE (text + batched tree at 276ms, 3.6 Hz)
+S1.5: Tactical Planning ← DONE (64% on 50 eps, 94% of baseline, confidence+drift replanning active)
 N3: More Tasks          ← blocked on dataset access
 N4: Jetson              ← blocked on hardware
 ```
+
+### S1.5 Integration Eval Results (2026-03-28)
+
+Full S1.5 stack (SimVLM + DriftDetector + confidence replanning) validated on TwoRoom with zero mocks:
+
+| Metric | Baseline | S1.5 |
+|--------|----------|------|
+| Success rate (50 eps) | 68% | 64% |
+| Confidence replans | — | 49 |
+| Drift replans | — | 9 |
+| Mean confidence | — | 0.81 |
+
+Drift threshold sweep found sweet spot at 500-750. At threshold=750, S1.5 (75%) outperformed baseline (65%) on 20 episodes. See `results/s15_*.json` and [docs/S1_5.md](S1_5.md) for full details.
 
 **Recommended order:** N3 (more tasks) when datasets become available, or N4 (Jetson) when hardware is procured. N1, N2, and integration are complete.

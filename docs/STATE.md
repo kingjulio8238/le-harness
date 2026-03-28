@@ -192,6 +192,7 @@ The architecture is sound. The actual blocker for real robotics is: **the world 
 | N1 | Batched CEM | 697ms → 282ms (2.5x speedup, 3.5 Hz) |
 | N2 | Language conditioning | Text goals match image goals (104%) |
 | Integration | Full stack (text + batched tree) | 276ms / 3.6 Hz, 86% of image baseline |
+| S1.5 | Tactical replanning (confidence + drift) | 64% on 50 eps (94% of baseline), conf replans=49, drift replans=9 |
 
 ### Failed Experiments (documented learnings)
 
@@ -222,4 +223,12 @@ Full stack on TwoRoom (RTX 4090):
   ├── CEM samples:   128 × 7 iterations = 896 per call
   ├── Tree calls:    2 batched CEM ops (root + depth)
   └── Total dreams:  ~6,300 latent rollouts per planning step
+
+  S1.5 Tactical Planning (confidence + drift replanning)
+  ├── Baseline:       68% flat CEM (50 episodes)
+  ├── S1.5:           64% (94% of baseline)
+  ├── Conf replans:   49 total across 50 episodes
+  ├── Drift replans:  9 (threshold=500)
+  ├── Mean confidence: 0.81
+  └── Drift sweet spot: threshold 500-750
 ```

@@ -188,6 +188,14 @@ python scripts/sweep_budget.py --policy pusht/lejepa --dry-run
 | Peak GPU memory | — | **89 MB** | — |
 | Model size | 15M | **15M** | unchanged |
 
+### S1.5: Tactical Planning Layer
+
+S1.5 extends LeHarness with closed-loop feedback for VLM orchestration — the planner reports confidence and drift back to the VLM, enabling replanning when the world model's predictions diverge from reality. This is the S1→S2 feedback loop that no other dual-system architecture (GR00T N1, Helix, OpenHelix) provides.
+
+**On-pod results (TwoRoom, 50 episodes):** Baseline flat CEM 68%, S1.5 with replanning 64%. Confidence replans: 49, drift replans: 9, mean confidence: 0.81. Drift threshold sweet spot: 500-750.
+
+See [docs/S1_5.md](docs/S1_5.md) for the full S1.5 specification, VLM interface design, and on-pod validation results.
+
 ### Repository Structure
 
 ```
@@ -196,21 +204,37 @@ le-harness/
   module.py                        # Transformer blocks, attention, embedders
   eval.py                          # Standard evaluation with CEM planning
   harness/
-    pipeline.py                    # End-to-end planning API (Phase 7)
-    compiled_inference.py          # torch.compile + CUDA graphs + buffers (Phase 5)
-    adaptive_solver.py             # Early stopping wrapper (Phase 3)
+    pipeline.py                    # End-to-end planning API — returns PlanResult with confidence
+    compiled_inference.py          # torch.compile + CUDA graphs + buffers
+    plan_result.py                 # Structured return: action + confidence + terminal_embedding
+    dream_tree.py                  # Dream Tree planner (CEM-inside-MCTS)
+    language_encoder.py            # CLIP/coord text goal encoding
+    s15_loop.py                    # S1.5 control loop: VLM → plan → execute → drift → replan
+    drift_detector.py              # Prediction vs reality divergence monitoring
+    sim_components.py              # SimVLM + SimMotorPolicy for sim evaluation
+    goal_adapter.py                # Unified goal ingestion (image/text/VLM embedding)
+    protocols.py                   # VLMProtocol + MotorProtocol interfaces
+    projections.py                 # VLM→LeWM projection MLPs (SigLIP, T5, Eagle, etc.)
+    subgoal_sequencer.py           # Multi-step goal sequencing
+    adaptive_solver.py             # Early stopping CEM wrapper
     value_function.py              # Learned value function (Phase 4)
     value_cost.py                  # Value cost model for solver (Phase 4)
   scripts/
+    eval_s15_integration.py        # Zero-mock S1.5 integration eval
+    eval_dream_tree.py             # Dream Tree vs flat CEM comparison
+    eval_combined.py               # N1+N2+D3 all combinations
+    train_vlm_projection.py        # Train any VLM→LeWM projection MLP
     final_benchmark.py             # Reproducible end-to-end benchmark
     sweep_budget.py                # Staged CEM budget sweep
     benchmark_latency.py           # Component-level latency profiling
-    log_convergence.py             # Per-iteration cost convergence
-    eval_adaptive.py               # Adaptive stopping evaluation
     patch_icem.py                  # Fix for iCEM action bounds
+  tests/                           # 124 unit tests for S1.5 components
   config/                          # Hydra configs for training and eval
   docs/
-    PROJECT.md                     # Full project documentation with all results
+    S1_5.md                        # S1.5 tactical planning spec + validation results
+    STATE.md                       # How the world model works end-to-end
+    DREAM_ENGINE.md                # Dream Tree, language conditioning, integration results
+    PROJECT.md                     # Full project documentation
     VOLUME.md                      # Network volume layout
     HARNESS.md                     # Technical architecture details
 ```
