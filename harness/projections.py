@@ -1,11 +1,16 @@
 """
-Projection MLPs mapping VLM embeddings to LeWM's 192-dim space.
+Projection MLPs mapping VLM embeddings to LeWM's planning space.
 
 These are lightweight modules that can be imported without heavy
 dependencies (CLIP, open_clip, etc.).
+
+Default ``out_dim`` comes from ``harness.dims.LEWM_EMBED_DIM`` so that
+non-LeWM consumers can override it cleanly.
 """
 
 import torch.nn as nn
+
+from harness.dims import LEWM_EMBED_DIM
 
 
 class VLMProjection(nn.Module):
@@ -21,7 +26,7 @@ class VLMProjection(nn.Module):
         PaliGemma full (Pi0): 4608
     """
 
-    def __init__(self, in_dim: int, hidden_dim: int = 512, out_dim: int = 192):
+    def __init__(self, in_dim: int, hidden_dim: int = 512, out_dim: int = LEWM_EMBED_DIM):
         super().__init__()
         self.in_dim = in_dim
         self.net = nn.Sequential(
@@ -41,7 +46,7 @@ class VLMProjection(nn.Module):
 class CoordProjection(nn.Module):
     """MLP mapping (x, y) coordinates to LeWM embedding space."""
 
-    def __init__(self, hidden_dim=256, out_dim=192):
+    def __init__(self, hidden_dim=256, out_dim=LEWM_EMBED_DIM):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(2, hidden_dim),
@@ -60,7 +65,7 @@ class CoordProjection(nn.Module):
 class CLIPProjection(nn.Module):
     """MLP mapping CLIP text features to LeWM embedding space."""
 
-    def __init__(self, in_dim=512, hidden_dim=512, out_dim=192):
+    def __init__(self, in_dim=512, hidden_dim=512, out_dim=LEWM_EMBED_DIM):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),

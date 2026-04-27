@@ -4,7 +4,7 @@ Phase 4: Learned Per-Step Value Function
 V(z_t, z_goal) → progress score ∈ [0, 1]
 
 Architecture: 2-layer MLP with LayerNorm + Mish activations.
-Input: concatenation of z_t and z_goal (384-dim for 192-dim embeddings).
+Input: concatenation of z_t and z_goal (2*embed_dim).
 Output: scalar progress estimate.
 
 Ensemble of N copies trained with different seeds for uncertainty.
@@ -15,11 +15,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pathlib import Path
 
+from harness.dims import LEWM_EMBED_DIM
+
 
 class ValueFunction(nn.Module):
     """Per-step value function V(z_t, z_goal) → progress."""
 
-    def __init__(self, embed_dim: int = 192, hidden_dim: int = 256):
+    def __init__(self, embed_dim: int = LEWM_EMBED_DIM, hidden_dim: int = 256):
         super().__init__()
         input_dim = embed_dim * 2  # concat z_t and z_goal
         self.net = nn.Sequential(
@@ -51,7 +53,7 @@ class ValueEnsemble(nn.Module):
     def __init__(
         self,
         n_members: int = 5,
-        embed_dim: int = 192,
+        embed_dim: int = LEWM_EMBED_DIM,
         hidden_dim: int = 256,
     ):
         super().__init__()

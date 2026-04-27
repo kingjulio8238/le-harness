@@ -17,7 +17,7 @@ Usage (on-pod with real components):
     from harness.s15_loop import S15ControlLoop
 
     vlm = SimVLM(pipeline, goal_image=goal_img, dataset=dataset, ...)
-    motor = SimMotorPolicy(world, process, pipeline._action_dim)
+    motor = SimMotorPolicy(world, process, pipeline.action_dim)
     loop = S15ControlLoop(pipeline, vlm, motor)
 
     stats = loop.run_episode(initial_obs=obs_img, max_steps=100)

@@ -25,6 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from harness.dims import LEWM_EMBED_DIM
 from harness.value_function import ValueEnsemble
 
 
@@ -125,7 +126,7 @@ class DreamScorer:
         ckpt = torch.load(path, map_location=device, weights_only=True)
         ensemble = ValueEnsemble(
             n_members=ckpt.get("n_members", 5),
-            embed_dim=ckpt.get("embed_dim", 192),
+            embed_dim=ckpt.get("embed_dim", LEWM_EMBED_DIM),
             hidden_dim=ckpt.get("hidden_dim", 256),
         )
         ensemble.load_state_dict(ckpt["state_dict"])

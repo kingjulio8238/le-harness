@@ -67,22 +67,16 @@ class DreamTreePlanner:
         cem_steps: int | None = None,
     ):
         self.pipeline = pipeline
+        self.solver = pipeline.solver  # public CEMSolver handle
         self.device = pipeline.device
         self.num_roots = num_roots
         self.max_depth = max_depth
         self.cheap_depth = cheap_depth
         self.batched = batched
-        self._action_dim = pipeline._action_dim
+        self._action_dim = pipeline.action_dim
         # Batched CEM converges in ~7 steps (1% cost gap vs 15).
         # Default to 7 when batched to hit <300ms gate.
         self.cem_steps = cem_steps if cem_steps is not None else (7 if batched else None)
-
-        # Cache uncompiled predictor for flexible depth scoring
-        # (compiled predictor uses CUDA graphs with fixed shapes)
-        predictor = pipeline.model.predictor
-        self._uncompiled_predictor = (
-            predictor._orig_mod if hasattr(predictor, '_orig_mod') else None
-        )
 
         self.timing = {"total_ms": [], "root_ms": [], "expansion_ms": []}
         self.stats = {"total_cem_calls": [], "total_nodes": []}
@@ -98,10 +92,12 @@ class DreamTreePlanner:
         obs_emb = self.pipeline.encode(obs_tensor)   # (1, 1, D)
         goal_emb = self.pipeline.encode(goal_tensor)  # (1, 1, D)
 
-        # Temporarily override pipeline CEM iterations if cem_steps is set
+        # Temporarily override solver CEM iterations if cem_steps is set.
         orig_n_steps = None
         if self.cem_steps is not None:
-            orig_n_steps = self.pipeline.n_steps
+            orig_n_steps = self.solver.n_steps
+            self.solver.n_steps = self.cem_steps
+            # Mirror to pipeline.n_steps so the legacy shims stay consistent.
             self.pipeline.n_steps = self.cem_steps
 
         if self.batched:
@@ -110,6 +106,7 @@ class DreamTreePlanner:
             action = self._plan_sequential(obs_emb, goal_emb)
 
         if orig_n_steps is not None:
+            self.solver.n_steps = orig_n_steps
             self.pipeline.n_steps = orig_n_steps
 
         t_total = (time.perf_counter() - t_start) * 1000
@@ -126,7 +123,7 @@ class DreamTreePlanner:
         batched_obs = obs_emb.expand(K, -1, -1)    # (K, 1, D)
         batched_goal = goal_emb.expand(K, -1, -1)  # (K, 1, D)
 
-        root_actions, root_terminal_embs = self.pipeline._cem_plan_batched(
+        root_actions, root_terminal_embs = self.solver.plan_batched(
             batched_obs, batched_goal, return_terminal_emb=True
         )
         # root_actions: (K, action_dim) numpy
@@ -141,10 +138,10 @@ class DreamTreePlanner:
 
         if self.max_depth >= 2:
             if self.cheap_depth:
-                # Score each root's future with mini-CEM (sequential — _score_state doesn't support B>1)
+                # Score each root's future with mini-CEM (sequential — score_state is B=1)
                 depth_costs = []
                 for i in range(K):
-                    c = self.pipeline._score_state(
+                    c = self.solver.score_state(
                         root_terminal_embs[i:i+1], goal_emb, n_rounds=3
                     )
                     depth_costs.append(c)
@@ -152,7 +149,7 @@ class DreamTreePlanner:
             else:
                 # Full batched CEM at depth
                 depth_goal = goal_emb.expand(K, -1, -1)  # (K, 1, D)
-                _, depth_terminal_embs = self.pipeline._cem_plan_batched(
+                _, depth_terminal_embs = self.solver.plan_batched(
                     root_terminal_embs, depth_goal, return_terminal_emb=True
                 )
                 # Score: MSE between depth terminal and goal
@@ -185,8 +182,10 @@ class DreamTreePlanner:
         t_root = time.perf_counter()
         root_candidates = []
         for _ in range(self.num_roots):
-            action, terminal_emb, _ = self.pipeline._cem_plan(
-                obs_emb, goal_emb, return_terminal_emb=True
+            action, terminal_emb, _ = self.solver.plan(
+                obs_emb, goal_emb,
+                return_terminal_emb=True, return_cost=True,
+                obs_emb_for_scorer=self.pipeline.obs_emb,
             )
             cost = self._cost(terminal_emb, goal_emb)
             root_candidates.append((action, cost, terminal_emb))
@@ -204,10 +203,11 @@ class DreamTreePlanner:
         for action, root_cost, terminal_emb in root_candidates:
             if self.max_depth >= 2:
                 if self.cheap_depth:
-                    d2_cost = self.pipeline._score_state(terminal_emb, goal_emb, n_rounds=3)
+                    d2_cost = self.solver.score_state(terminal_emb, goal_emb, n_rounds=3)
                 else:
-                    _, d2_terminal, _ = self.pipeline._cem_plan(
-                        terminal_emb, goal_emb, return_terminal_emb=True
+                    _, d2_terminal, _ = self.solver.plan(
+                        terminal_emb, goal_emb,
+                        return_terminal_emb=True, return_cost=True,
                     )
                     d2_cost = self._cost(d2_terminal, goal_emb)
                 cem_calls += 1
@@ -216,8 +216,9 @@ class DreamTreePlanner:
                     if self.cheap_depth:
                         value = d2_cost
                     else:
-                        _, d3_terminal, _ = self.pipeline._cem_plan(
-                            d2_terminal, goal_emb, return_terminal_emb=True
+                        _, d3_terminal, _ = self.solver.plan(
+                            d2_terminal, goal_emb,
+                            return_terminal_emb=True, return_cost=True,
                         )
                         d3_cost = self._cost(d3_terminal, goal_emb)
                         cem_calls += 1

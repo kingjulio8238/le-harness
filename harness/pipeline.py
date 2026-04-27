@@ -37,7 +37,9 @@ import torch.nn.functional as F
 from einops import rearrange
 from torchvision.transforms import v2 as transforms
 
+from harness.cem import CEMSolver
 from harness.compiled_inference import optimize_model
+from harness.dims import LEWM_EMBED_DIM
 from harness.plan_result import PlanResult
 
 
@@ -60,6 +62,8 @@ class PlanningPipeline:
         compile_mode: str = "reduce-overhead",
         replan_threshold: float = 0.3,
         cost_scale: float = 10.0,
+        action_dim: int | None = None,
+        embed_dim: int | None = None,
     ):
         self.num_samples = num_samples
         self.n_steps = n_steps
@@ -97,10 +101,34 @@ class PlanningPipeline:
         self._goal_emb = None
         self._obs_emb = None  # cached for scorer's progress signal
         self._compiled = False
-        self.scorer = None  # optional DreamScorer for multi-signal cost
         self.language_encoder = None  # lazy-loaded by set_goal_text()
-        # Infer action dim from model's action encoder input channels
-        self._action_dim = self.model.action_encoder.patch_embed.in_channels
+
+        # Action / embed dim — explicit constructor args win over introspection.
+        # Introspection is the legacy fallback that assumes JEPA-shaped models;
+        # an imagination-engine fork should pass these explicitly via spec.
+        if action_dim is not None:
+            self._action_dim = action_dim
+        else:
+            try:
+                self._action_dim = self.model.action_encoder.patch_embed.in_channels
+            except AttributeError as e:
+                raise RuntimeError(
+                    "Could not infer action_dim from model.action_encoder.patch_embed; "
+                    "pass action_dim= explicitly to PlanningPipeline."
+                ) from e
+        self._embed_dim = embed_dim if embed_dim is not None else LEWM_EMBED_DIM
+
+        # CEM solver — owns the action search loop. Pipeline is now a thin
+        # facade composing Engine (encode/decode) + CEMSolver (action search).
+        self.solver = CEMSolver(
+            self.model,
+            action_dim=self._action_dim,
+            horizon=self.horizon,
+            history_size=self.history_size,
+            num_samples=self.num_samples,
+            n_steps=self.n_steps,
+            topk=self.topk,
+        )
 
         # Timing stats
         self.timing = {
@@ -110,6 +138,38 @@ class PlanningPipeline:
             "planability_ms": [],
             "total_ms": [],
         }
+
+    # `scorer` is owned by the solver; expose as a property so external code
+    # like `pipeline.scorer = MyScorer()` (in scripts/) keeps working.
+    @property
+    def scorer(self):
+        return self.solver.scorer
+
+    @scorer.setter
+    def scorer(self, value):
+        self.solver.scorer = value
+
+    # Public accessors so consumers like DreamTreePlanner do not need to
+    # reach into underscore-prefixed pipeline internals.
+    @property
+    def action_dim(self) -> int:
+        """Action dim used by the solver. Alias for the legacy _action_dim."""
+        return self._action_dim
+
+    @property
+    def embed_dim(self) -> int:
+        """Embedding dim of the model's planning space."""
+        return self._embed_dim
+
+    @property
+    def obs_emb(self):
+        """Most recently encoded observation embedding, cached by plan()."""
+        return self._obs_emb
+
+    @property
+    def goal_emb(self):
+        """Currently set goal embedding (image / text / VLM-projected)."""
+        return self._goal_emb
 
     def warmup(self, n_iters: int = 3):
         """Trigger torch.compile by running dummy inputs."""
@@ -272,244 +332,67 @@ class PlanningPipeline:
             replan_threshold=self.replan_threshold,
         )
 
+    # ------------------------------------------------------------------
+    # Legacy CEM API — thin shims that delegate to self.solver (CEMSolver).
+    # These exist so dream_tree.py and other callers continue to work
+    # during migration. New code should call self.solver directly.
+    # ------------------------------------------------------------------
+
     def _cem_plan(self, obs_emb: torch.Tensor, goal_emb: torch.Tensor,
                   return_terminal_emb: bool = False, return_cost: bool = False):
-        """Run CEM optimization with cached embeddings.
-
-        Args:
-            obs_emb: (1, 1, 192) observation embedding
-            goal_emb: (1, 1, 192) goal embedding
-            return_terminal_emb: if True, also return the predicted terminal
-                embedding of the best trajectory
-            return_cost: if True, also return the best CEM cost
-
-        Returns:
-            action: (action_dim,) numpy array — first action from best plan
-            If return_terminal_emb or return_cost, returns a tuple:
-                (action, terminal_emb_or_None, best_cost_or_None)
-        """
-        S = self.num_samples
-        H = 1  # history length (from obs)
-        T = H + self.horizon
-        D = obs_emb.shape[-1]
-        device = obs_emb.device
-
-        # Initialize CEM distribution
-        mean = torch.zeros(1, T, self._action_dim, device=device)
-        var = torch.ones(1, T, self._action_dim, device=device)
-
-        last_all_embs = None
-        best_cost = None
-
-        for cem_iter in range(self.n_steps):
-            # Sample candidates
-            noise = torch.randn(1, S, T, self._action_dim, device=device)
-            candidates = noise * var.unsqueeze(1) + mean.unsqueeze(1)
-            candidates[:, 0] = mean  # mean is always a candidate
-
-            # Evaluate: rollout + cost
-            costs, all_embs = self._evaluate_candidates(
-                obs_emb, goal_emb, candidates, S, H, return_embs=True
-            )
-            last_all_embs = all_embs  # (1, S, T_rollout, D)
-
-            # Select top-k
-            topk_vals, topk_inds = torch.topk(costs, k=self.topk, dim=1, largest=False)
-            topk_cands = candidates[0, topk_inds[0]]  # (topk, T, action_dim)
-            best_cost = float(topk_vals[0, 0])
-
-            # Update distribution
-            mean = topk_cands.mean(dim=0, keepdim=True)
-            var = topk_cands.std(dim=0, keepdim=True)
-
-        action = mean[0, 0].cpu().numpy()
-
-        if return_terminal_emb or return_cost:
-            terminal_emb = None
-            if return_terminal_emb:
-                # Get terminal embedding of the best candidate (index 0 = mean, which was injected)
-                # Re-evaluate the mean trajectory to get its exact terminal embedding
-                mean_candidate = mean.unsqueeze(1)  # (1, 1, T, action_dim)
-                _, mean_embs = self._evaluate_candidates(
-                    obs_emb, goal_emb, mean_candidate, 1, H, return_embs=True
-                )
-                terminal_emb = mean_embs[:, :, -1:, :]  # (1, 1, 1, D) → squeeze to (1, 1, D)
-                terminal_emb = terminal_emb.squeeze(1)  # (1, 1, D)
-            return action, terminal_emb, best_cost
-
-        return action
+        """Legacy shim — delegates to self.solver.plan."""
+        # Keep solver hyperparams in sync with pipeline (cem_steps may have
+        # been overridden externally, e.g. by DreamTreePlanner).
+        self.solver.n_steps = self.n_steps
+        self.solver.num_samples = self.num_samples
+        self.solver.horizon = self.horizon
+        self.solver.topk = self.topk
+        self.solver.history_size = self.history_size
+        return self.solver.plan(
+            obs_emb,
+            goal_emb,
+            return_terminal_emb=return_terminal_emb,
+            return_cost=return_cost,
+            obs_emb_for_scorer=self._obs_emb,
+        )
 
     def _score_state(self, obs_emb: torch.Tensor, goal_emb: torch.Tensor,
                      n_rounds: int = 1) -> float:
-        """Score how plannable a state is with lightweight CEM.
-
-        Runs n_rounds of CEM (sample, evaluate, refine) and returns the
-        min cost. With n_rounds=1, this is a single random sample pass.
-        With n_rounds=3-5, it's a mini-CEM that gives better signal.
-
-        Uses S=128 (same batch size as compiled path) for CUDA graph
-        compatibility.
-
-        Args:
-            obs_emb: (1, 1, D) state embedding to score
-            goal_emb: (1, 1, D) goal embedding
-            n_rounds: number of CEM iterations (1=random, 3-5=mini-CEM)
-
-        Returns:
-            float: min MSE cost across best samples
-        """
-        S = self.num_samples  # 128
-        H = 1
-        T = H + self.horizon
-
-        mean = torch.zeros(1, T, self._action_dim, device=obs_emb.device)
-        var = torch.ones(1, T, self._action_dim, device=obs_emb.device)
-
-        best_cost = float("inf")
-        for _ in range(n_rounds):
-            noise = torch.randn(1, S, T, self._action_dim, device=obs_emb.device)
-            candidates = mean.unsqueeze(1) + noise * var.unsqueeze(1).sqrt()
-            candidates[:, 0] = mean
-
-            costs, _ = self._evaluate_candidates(obs_emb, goal_emb, candidates, S, H)
-
-            topk_vals, topk_inds = torch.topk(costs, k=self.topk, dim=1, largest=False)
-            topk_cands = candidates[0, topk_inds[0]]
-            mean = topk_cands.mean(dim=0, keepdim=True)
-            var = topk_cands.std(dim=0, keepdim=True)
-
-            round_best = float(topk_vals[0, 0])
-            if round_best < best_cost:
-                best_cost = round_best
-
-        return best_cost
+        """Legacy shim — delegates to self.solver.score_state."""
+        self.solver.n_steps = self.n_steps
+        self.solver.num_samples = self.num_samples
+        self.solver.horizon = self.horizon
+        self.solver.topk = self.topk
+        self.solver.history_size = self.history_size
+        return self.solver.score_state(obs_emb, goal_emb, n_rounds=n_rounds)
 
     def _cem_plan_batched(self, obs_emb: torch.Tensor, goal_emb: torch.Tensor,
                           return_terminal_emb: bool = True):
-        """Run B independent CEM instances in parallel.
-
-        Args:
-            obs_emb: (B, 1, D) — B different starting states
-            goal_emb: (B, 1, D) — B corresponding goals (can be same goal broadcast)
-
-        Returns:
-            actions: (B, action_dim) numpy array — best action from each CEM
-            terminal_embs: (B, 1, D) tensor — predicted endpoint of each best plan
-        """
-        B = obs_emb.shape[0]
-        S = self.num_samples
-        H = 1
-        T = H + self.horizon
-        D = obs_emb.shape[-1]
-        device = obs_emb.device
-
-        # Initialize B independent CEM distributions
-        mean = torch.zeros(B, T, self._action_dim, device=device)
-        var = torch.ones(B, T, self._action_dim, device=device)
-
-        for cem_iter in range(self.n_steps):
-            # Sample candidates: (B, S, T, action_dim)
-            noise = torch.randn(B, S, T, self._action_dim, device=device)
-            candidates = noise * var.unsqueeze(1) + mean.unsqueeze(1)
-            candidates[:, 0] = mean  # inject mean as first candidate for each batch
-
-            # Evaluate: rollout + cost — (B, S)
-            costs, _ = self._evaluate_candidates(
-                obs_emb, goal_emb, candidates, S, H, return_embs=False
-            )
-
-            # Select top-k per batch element
-            topk_vals, topk_inds = torch.topk(costs, k=self.topk, dim=1, largest=False)
-            # topk_inds: (B, topk) — indices into dim 1 of candidates
-
-            # Gather elite candidates: (B, topk, T, action_dim)
-            topk_inds_expanded = topk_inds.unsqueeze(-1).unsqueeze(-1).expand(
-                B, self.topk, T, self._action_dim
-            )
-            topk_cands = torch.gather(candidates, 1, topk_inds_expanded)
-
-            # Update distribution per batch
-            mean = topk_cands.mean(dim=1)  # (B, T, action_dim)
-            var = topk_cands.std(dim=1)    # (B, T, action_dim)
-
-        # Extract actions: first timestep of each mean plan
-        actions = mean[:, 0].cpu().numpy()  # (B, action_dim)
-
-        if return_terminal_emb:
-            # Re-evaluate each mean trajectory to get terminal embeddings
-            mean_candidates = mean.unsqueeze(1)  # (B, 1, T, action_dim)
-            _, mean_embs = self._evaluate_candidates(
-                obs_emb, goal_emb, mean_candidates, 1, H, return_embs=True
-            )
-            # mean_embs: (B, 1, T_rollout, D)
-            terminal_embs = mean_embs[:, 0, -1:, :]  # (B, 1, D)
-            return actions, terminal_embs
-
-        return actions, None
+        """Legacy shim — delegates to self.solver.plan_batched."""
+        self.solver.n_steps = self.n_steps
+        self.solver.num_samples = self.num_samples
+        self.solver.horizon = self.horizon
+        self.solver.topk = self.topk
+        self.solver.history_size = self.history_size
+        return self.solver.plan_batched(
+            obs_emb, goal_emb, return_terminal_emb=return_terminal_emb
+        )
 
     def _evaluate_candidates(
         self, obs_emb, goal_emb, candidates, S, H, return_embs: bool = False
     ):
-        """Evaluate candidate action sequences via rollout + MSE cost.
-
-        Supports arbitrary batch size B (for batched CEM).
-
-        Args:
-            obs_emb: (B, 1, D) observation embeddings
-            goal_emb: (B, 1, D) goal embeddings
-            candidates: (B, S, T, action_dim)
-            S: number of samples per batch element
-            H: history length
-            return_embs: if True, return predicted embeddings
-
-        Returns:
-            costs: (B, S) tensor of MSE costs
-            If return_embs: (costs, all_embs) where all_embs is (B, S, T, D)
-        """
-        B = obs_emb.shape[0]
-        horizon = self.horizon
-
-        # Expand obs for all samples
-        emb = obs_emb.unsqueeze(1).expand(B, S, -1, -1)
-        emb = rearrange(emb, "b s t d -> (b s) t d").clone()
-
-        # Split candidates
-        act_0 = candidates[:, :, :H, :]
-        act_future = candidates[:, :, H:, :]
-        act = rearrange(act_0, "b s t d -> (b s) t d")
-        act_future_flat = rearrange(act_future, "b s t d -> (b s) t d")
-
-        HS = self.history_size
-
-        # Autoregressive rollout
-        for t in range(horizon):
-            start = max(0, emb.shape[1] - HS)
-            act_emb = self.model.action_encoder(act[:, start:, :])
-            pred = self.model.predict(emb[:, start:, :], act_emb)[:, -1:]
-            emb = torch.cat([emb, pred], dim=1)
-            act = torch.cat([act, act_future_flat[:, t : t + 1, :]], dim=1)
-
-        # Final predict
-        start = max(0, emb.shape[1] - HS)
-        act_emb = self.model.action_encoder(act[:, start:, :])
-        pred = self.model.predict(emb[:, start:, :], act_emb)[:, -1:]
-        emb = torch.cat([emb, pred], dim=1)
-
-        # Cost computation
-        pred_emb = rearrange(emb, "(b_s) t d -> b_s t d", b_s=B * S)
-        pred_emb = pred_emb.view(B, S, pred_emb.shape[1], pred_emb.shape[2])
-
-        if self.scorer is not None and self._obs_emb is not None:
-            # Multi-signal scoring (D4)
-            cost = self.scorer.score(pred_emb, self._obs_emb, goal_emb)
-        else:
-            # Default: MSE between last predicted embedding and goal
-            goal_exp = goal_emb[:, -1:, :].unsqueeze(1).expand(B, S, 1, -1)
-            cost = ((pred_emb[:, :, -1:, :] - goal_exp) ** 2).sum(dim=-1).squeeze(-1)
-
-        if return_embs:
-            return cost, pred_emb
-        return cost, None
+        """Legacy shim — delegates to self.solver.evaluate_candidates."""
+        self.solver.horizon = self.horizon
+        self.solver.history_size = self.history_size
+        return self.solver.evaluate_candidates(
+            obs_emb,
+            goal_emb,
+            candidates,
+            S=S,
+            H=H,
+            return_embs=return_embs,
+            obs_emb_for_scorer=self._obs_emb,
+        )
 
     def get_timing_summary(self) -> dict:
         """Return timing statistics."""
